@@ -115,6 +115,15 @@ static float s_current   = 0.65f;
 static float s_voltage   = 230.0f;
 static float s_load      = 10.0f;
 static int   s_battery   = 85;
+static int   s_backup_time = 60; /* minutes of backup remaining */
+
+typedef enum {
+    BATTSTATE_FULL       = 0,
+    BATTSTATE_CHARGE     = 1,
+    BATTSTATE_DISCHARGE  = 2,
+} battstate_t;
+
+static battstate_t s_battstate = BATTSTATE_FULL;
 
 /* ── Output helpers ──────────────────────────────────────────────────────── */
 
@@ -448,6 +457,25 @@ static void handle_query_batterystat(void)
     sendln(tmp);
 }
 
+static void handle_query_battstate(void)
+{
+    static const char *states[] = {
+        [BATTSTATE_FULL]      = "FULL",
+        [BATTSTATE_CHARGE]    = "CHARGE",
+        [BATTSTATE_DISCHARGE] = "DISCHARGE",
+    };
+    char tmp[32];
+    snprintf(tmp, sizeof(tmp), "$BATTSTATE = %s", states[s_battstate]);
+    sendln(tmp);
+}
+
+static void handle_query_time(void)
+{
+    char tmp[24];
+    snprintf(tmp, sizeof(tmp), "$TIME = %d", s_backup_time);
+    sendln(tmp);
+}
+
 static void handle_query_list_config(void)
 {
     static const char *avr_modes[]    = { "OFF", "STANDARD", "SENSITIVE" };
@@ -491,6 +519,8 @@ static void handle_query_help(void)
         "?VOLTAGE",
         "?LOADSTAT",
         "?BATTERYSTAT",
+        "?BATTSTATE",
+        "?TIME",
         "?LIST_CONFIG",
         "?HELP",
         NULL
@@ -538,6 +568,8 @@ static void dispatch(const char *cmd)
         if (cmd_exact(c, "VOLTAGE"))     { handle_query_voltage();     return; }
         if (cmd_exact(c, "LOADSTAT"))    { handle_query_loadstat();    return; }
         if (cmd_exact(c, "BATTERYSTAT")) { handle_query_batterystat(); return; }
+        if (cmd_exact(c, "BATTSTATE"))   { handle_query_battstate();   return; }
+        if (cmd_exact(c, "TIME"))        { handle_query_time();        return; }
         if (cmd_exact(c, "LIST_CONFIG")) { handle_query_list_config(); return; }
         if (cmd_exact(c, "HELP"))        { handle_query_help();        return; }
     }

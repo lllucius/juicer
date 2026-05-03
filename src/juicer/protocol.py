@@ -514,6 +514,16 @@ def query_batterystat() -> str:
     return f"?BATTERYSTAT{CR}"
 
 
+def query_battstate() -> str:
+    """Build ``?BATTSTATE\\r``."""
+    return f"?BATTSTATE{CR}"
+
+
+def query_time() -> str:
+    """Build ``?TIME\\r``."""
+    return f"?TIME{CR}"
+
+
 def query_list_config() -> str:
     """Build ``?LIST_CONFIG\\r``."""
     return f"?LIST_CONFIG{CR}"
@@ -1012,6 +1022,22 @@ class JuicerClient:
         if isinstance(resp, BatteryLevelResponse):
             return resp
         raise ProtocolError(f"Expected BatteryLevelResponse, got {resp!r}")
+
+    def query_battery_state(self) -> BatteryStateResponse:
+        """Send ``?BATTSTATE``."""
+        self._send(query_battstate())
+        resp = self._recv_parsed()
+        if isinstance(resp, BatteryStateResponse):
+            return resp
+        raise ProtocolError(f"Expected BatteryStateResponse, got {resp!r}")
+
+    def query_backup_time(self) -> BackupTimeResponse:
+        """Send ``?TIME``."""
+        self._send(query_time())
+        resp = self._recv_parsed()
+        if isinstance(resp, BackupTimeResponse):
+            return resp
+        raise ProtocolError(f"Expected BackupTimeResponse, got {resp!r}")
 
     def query_list_config(self) -> ListConfigResponse:
         """Send ``?LIST_CONFIG`` and aggregate response lines."""

@@ -127,6 +127,8 @@ juicer-gui
 | `?VOLTAGE` | `$VOLTAGE = <volts>` |
 | `?LOADSTAT` | `$LOAD = <percent>` |
 | `?BATTERYSTAT` | `$BATTERY = <percent>` |
+| `?BATTSTATE` | `$BATTSTATE = <FULL\|CHARGE\|DISCHARGE>` |
+| `?TIME` | `$TIME = <minutes>` |
 | `?LIST_CONFIG` | All configuration settings |
 | `?HELP` | List of all supported commands |
 
@@ -147,6 +149,8 @@ The emulator returns fixed, plausible readings for sensor queries:
 | Voltage | 230.0 V |
 | Load | 10.0 % |
 | Battery | 85 % |
+| Battery state | FULL |
+| Backup time | 60 min |
 | Power status | NORMAL |
 
 Sensor values are compile-time constants (`s_*` variables near the top of
