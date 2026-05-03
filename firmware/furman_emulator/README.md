@@ -1,6 +1,6 @@
-# Furman F1500-UPS E Emulator — ESP32 Firmware
+# Furman F1500-UPS E Emulator — ESP32 Firmware (ESP-IDF v6.0)
 
-An ESP32 Arduino sketch that emulates the RS-232 serial protocol of the
+An ESP-IDF v6.0 application that emulates the RS-232 serial protocol of the
 **Furman F1500-UPS E** UPS.  Use it to test the Juicer CLI, GUI, and
 Windows service without real hardware.
 
@@ -8,39 +8,69 @@ Windows service without real hardware.
 
 ## Requirements
 
-| Tool | Notes |
-|------|-------|
-| ESP32 dev board | Any board based on the ESP32, ESP32-S2, ESP32-S3, or ESP32-C3 |
-| [Arduino IDE 2.x](https://www.arduino.cc/en/software) **or** [PlatformIO](https://platformio.org/) | Either toolchain works |
-| [arduino-esp32 core](https://github.com/espressif/arduino-esp32) | ≥ 2.0 (Arduino IDE board manager) |
+| Requirement | Notes |
+|-------------|-------|
+| ESP32 dev board | Any board with a USB-UART bridge (CP2102, CH340, …) and an ESP32, ESP32-S2, ESP32-S3, or ESP32-C3 SoC |
+| [ESP-IDF **v6.0**](https://github.com/espressif/esp-idf) | Follow the [official installation guide](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/index.html) |
 
 ---
 
-## Flashing
+## Project layout
 
-### Arduino IDE
-
-1. Open **`furman_emulator.ino`** in Arduino IDE.
-2. Select your board under **Tools → Board → esp32 → ESP32 Dev Module**
-   (or whichever variant you have).
-3. Select the correct **Tools → Port**.
-4. Click **Upload** (Ctrl+U).
-
-### PlatformIO (CLI or VS Code extension)
-
-```bash
-cd firmware/furman_emulator
-pio run --target upload
+```
+firmware/furman_emulator/
+├── CMakeLists.txt        — top-level ESP-IDF project file
+├── sdkconfig.defaults    — disables IDF console so UART0 stays clean
+├── main/
+│   ├── CMakeLists.txt    — component registration
+│   └── main.c            — complete protocol emulator
+└── README.md
 ```
 
-The `platformio.ini` targets `esp32dev`.  Change the `board` value if you
-have a different board (e.g. `esp32-s3-devkitc-1`).
+---
+
+## Build and flash
+
+```bash
+# 1. Activate the ESP-IDF v6.0 environment (adjust path to your install)
+. $HOME/esp/esp-idf/export.sh
+
+# 2. Enter the project directory
+cd firmware/furman_emulator
+
+# 3. (Optional) choose a non-default target, e.g. for ESP32-S3:
+#    idf.py set-target esp32s3
+#    The default target is esp32.
+
+# 4. Build
+idf.py build
+
+# 5. Flash  (replace /dev/ttyUSB0 with your port)
+idf.py -p /dev/ttyUSB0 flash
+```
+
+> **Note:** `idf.py monitor` will show no output because
+> `sdkconfig.defaults` sets `CONFIG_ESP_CONSOLE_NONE=y`, which keeps UART0
+> free for the Furman protocol.  Use a separate terminal / serial monitor
+> at 9600 baud if you want to observe the raw traffic.
+
+### Windows
+
+```bat
+:: Activate ESP-IDF (adjust to your installation path)
+%USERPROFILE%\esp\esp-idf\export.bat
+
+cd firmware\furman_emulator
+idf.py build
+idf.py -p COM3 flash
+```
 
 ---
 
 ## Connecting to Juicer
 
-After flashing, the ESP32 appears as a virtual COM port:
+After flashing, the ESP32 appears as a virtual COM port through its
+on-board USB-UART bridge:
 
 | OS | Device name |
 |----|------------|
@@ -119,24 +149,37 @@ The emulator returns fixed, plausible readings for sensor queries:
 | Voltage | 230.0 V |
 | Load | 10.0 % |
 | Battery | 85 % |
-| Backup time | 30 min |
 | Power status | NORMAL |
 
-Sensor values are compile-time constants (`s_*` variables at the top of the
-sketch).  Edit them and re-flash to test different conditions.
+Sensor values are compile-time constants (`s_*` variables near the top of
+`main/main.c`).  Edit them and re-flash to test different conditions.
 
 ---
 
 ## Notes
 
-* **Baud rate** — Juicer's `SerialTransport` uses 9600 baud / 8-N-1 by
-  default.  USB-CDC virtual ports ignore the baud-rate setting from the host,
-  so the sketch works at any speed over USB.  If you wire the ESP32's hardware
-  UART through an RS-232 level-shifter instead, set both sides to 9600 baud.
+* **UART0 / USB-UART bridge** — `main.c` uses UART0 (GPIO1/TX, GPIO3/RX),
+  the UART wired to the on-board USB-UART bridge on all standard dev boards.
+  `sdkconfig.defaults` sets `CONFIG_ESP_CONSOLE_NONE=y` so the IDF boot
+  messages and log output do not appear on UART0 and corrupt the protocol.
 
-* **Hardware UART** — To use `Serial1` or `Serial2` instead of the USB
-  serial port, replace `Serial` with `Serial1` (or `Serial2`) throughout the
-  sketch and remove the `while (!Serial)` wait in `setup()`.
+* **Using a different UART** — Change `#define UART_PORT UART_NUM_0` to
+  `UART_NUM_1` (or `UART_NUM_2`) and update `uart_set_pin()` with the
+  desired TX/RX GPIO numbers.  Remove `CONFIG_ESP_CONSOLE_NONE=y` from
+  `sdkconfig.defaults` if you want the IDF console back on UART0.
+
+* **Using a different board target** — Run `idf.py set-target <target>`
+  (e.g. `esp32s3`, `esp32c3`) before `idf.py build`.  The emulator logic is
+  target-agnostic; only `LED_GPIO` may need adjusting for your board.
+
+* **LED pin** — The ready-blink uses GPIO2 (`LED_GPIO` in `main.c`), which
+  is the built-in LED on most ESP32-DevKitC boards.  Change it if your board
+  uses a different pin (e.g. GPIO8 on ESP32-C3-DevKitM-1).
+
+* **Baud rate** — Juicer's `SerialTransport` uses 9600 baud / 8-N-1 by
+  default, matching `UART_BAUD` in `main.c`.  The USB-UART bridge presents a
+  virtual COM port to the host; the host-side baud rate setting is passed
+  through transparently.
 
 * **Line ending** — The Furman protocol terminates lines with CR only
   (`\r`, 0x0D).  The emulator honours `!SET_LINEFEED ON` by appending LF as
