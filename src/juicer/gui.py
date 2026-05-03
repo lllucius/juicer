@@ -487,7 +487,7 @@ if _PYSIDE6_AVAILABLE:
 
                 st = service_status()
                 self.lbl_status.setText(st)
-            except OSError as exc:
+            except Exception as exc:
                 self.lbl_status.setText(f"N/A ({exc})")
 
         def _install(self) -> None:
