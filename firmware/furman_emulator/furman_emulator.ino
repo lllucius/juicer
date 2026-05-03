@@ -33,10 +33,19 @@
 
 #include <Arduino.h>
 
+// ── Index helpers ─────────────────────────────────────────────────────────────
+
+// Translate a 1-based bank number (1..4) to a 0-based array index.
+#define BANK_IDX(n)   ((n) - 1)
+
+// Translate a battery-threshold bank number (3 or 4) to a 0-based index
+// into the two-element bthresh[] array.
+#define BTHRESH_IDX(n) ((n) - 3)
+
 // ── Emulator state ────────────────────────────────────────────────────────────
 
-static bool bank[5]    = { false, false, false, false, false }; // 1-indexed [1..4]
-static int  bthresh[5] = { 0, 0, 0, 20, 20 };                  // banks 3 & 4 only
+static bool bank[4]    = { false, false, false, false }; // 0-based [0..3] = banks 1..4
+static int  bthresh[2] = { 20, 20 };                     // [0]=bank3, [1]=bank4
 
 static bool buzzer     = true;
 static int  avr_mode   = 0;    // 0=OFF  1=STANDARD  2=SENSITIVE
@@ -92,7 +101,7 @@ static void invalid_param()
 static void send_bank(int n)
 {
     char tmp[24];
-    snprintf(tmp, sizeof(tmp), "$BANK %d = %s", n, bank[n] ? "ON" : "OFF");
+    snprintf(tmp, sizeof(tmp), "$BANK %d = %s", n, bank[BANK_IDX(n)] ? "ON" : "OFF");
     sendln(tmp);
 }
 
@@ -131,7 +140,7 @@ static bool cmd_prefix(const char *input, const char *prefix, const char **args)
 
 static void handle_all_on()
 {
-    for (int i = 1; i <= 4; i++) {
+    for (int i = 0; i < 4; i++) {
         bank[i] = true;
     }
     send_all_banks();
@@ -139,7 +148,7 @@ static void handle_all_on()
 
 static void handle_all_off()
 {
-    for (int i = 1; i <= 4; i++) {
+    for (int i = 0; i < 4; i++) {
         bank[i] = false;
     }
     send_all_banks();
@@ -155,9 +164,9 @@ static void handle_switch(const char *args)
         return;
     }
     if (strcmp(state, "ON") == 0) {
-        bank[b] = true;
+        bank[BANK_IDX(b)] = true;
     } else if (strcmp(state, "OFF") == 0) {
-        bank[b] = false;
+        bank[BANK_IDX(b)] = false;
     } else {
         invalid_param();
         return;
@@ -178,9 +187,9 @@ static void handle_set_batthresh(const char *args)
     }
     // The real device rounds up to the nearest 10.
     level = ((level + 9) / 10) * 10;
-    bthresh[b] = level;
+    bthresh[BTHRESH_IDX(b)] = level;
     char tmp[32];
-    snprintf(tmp, sizeof(tmp), "$BTHRESH %d = %d", b, bthresh[b]);
+    snprintf(tmp, sizeof(tmp), "$BTHRESH %d = %d", b, bthresh[BTHRESH_IDX(b)]);
     sendln(tmp);
 }
 
@@ -283,8 +292,8 @@ static void handle_set_sleepmode(const char *args)
 /* "RESET_ALL" — restore all settings to factory defaults */
 static void handle_reset_all()
 {
-    for (int i = 1; i <= 4; i++) { bank[i] = false; }
-    bthresh[3] = bthresh[4] = 20;
+    for (int i = 0; i < 4; i++) { bank[i] = false; }
+    bthresh[0] = bthresh[1] = 20;
     buzzer     = true;
     avr_mode   = 0;
     feedback   = true;
@@ -378,8 +387,8 @@ static void handle_query_list_config()
     snprintf(tmp, sizeof(tmp), "$SCROLL_MODE = %s",     scroll_modes[scroll]);  sendln(tmp);
     snprintf(tmp, sizeof(tmp), "$SLEEP_MODE = %s",      sleep_modes[sleep_m]);  sendln(tmp);
     snprintf(tmp, sizeof(tmp), "$NORMALVOLT = %d",      normalvolt);            sendln(tmp);
-    snprintf(tmp, sizeof(tmp), "$BTHRESH 3 = %d",       bthresh[3]);            sendln(tmp);
-    snprintf(tmp, sizeof(tmp), "$BTHRESH 4 = %d",       bthresh[4]);            sendln(tmp);
+    snprintf(tmp, sizeof(tmp), "$BTHRESH 3 = %d",       bthresh[BTHRESH_IDX(3)]);  sendln(tmp);
+    snprintf(tmp, sizeof(tmp), "$BTHRESH 4 = %d",       bthresh[BTHRESH_IDX(4)]);  sendln(tmp);
 }
 
 static void handle_query_help()
