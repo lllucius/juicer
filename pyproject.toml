@@ -37,7 +37,7 @@ windows = [
     "pywin32>=306",
 ]
 dev = [
-    "pyinstaller>=6.0",
+    "nuitka>=2.0",
     "pytest>=8.0",
     "ruff>=0.4",
     "mypy>=1.10",

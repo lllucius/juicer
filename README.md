@@ -250,14 +250,15 @@ juicer service start
 
 ## Building Standalone Executables
 
-Standalone `.exe` files are built with [PyInstaller](https://pyinstaller.org).
+Standalone `.exe` files are built with [Nuitka](https://nuitka.net).
 
 ### Prerequisites
 
-Install the development dependencies (includes PyInstaller):
+Install the development dependencies (includes Nuitka) and the package itself:
 
 ```bat
 pip install -r requirements-dev.txt -r requirements-windows.txt
+pip install -e .
 ```
 
 ### Build both executables at once
@@ -269,8 +270,26 @@ packaging\build.bat
 ### Build individually
 
 ```bat
-pyinstaller packaging\juicer_cli.spec --noconfirm --clean
-pyinstaller packaging\juicer_gui.spec --noconfirm --clean
+set PYTHONPATH=src
+python -m nuitka ^
+    --onefile ^
+    --output-dir=dist ^
+    --output-filename=juicer.exe ^
+    --include-package=juicer ^
+    --nofollow-import-to=PySide6 ^
+    --nofollow-import-to=tkinter ^
+    --assume-yes-for-downloads ^
+    src\juicer\cli.py
+python -m nuitka ^
+    --onefile ^
+    --output-dir=dist ^
+    --output-filename=juicer-gui.exe ^
+    --enable-plugin=pyside6 ^
+    --include-package=juicer ^
+    --nofollow-import-to=tkinter ^
+    --windows-disable-console ^
+    --assume-yes-for-downloads ^
+    src\juicer\gui.py
 ```
 
 ### Output
@@ -302,8 +321,6 @@ juicer/
 │       ├── sequence.py     # Boot/shutdown sequencer
 │       └── service.py      # Windows service wrapper
 ├── packaging/
-│   ├── juicer_cli.spec     # PyInstaller spec — CLI
-│   ├── juicer_gui.spec     # PyInstaller spec — GUI
 │   └── build.bat           # Windows build script
 ├── pyproject.toml
 ├── requirements.txt
