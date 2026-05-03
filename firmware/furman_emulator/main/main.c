@@ -117,15 +117,15 @@ static int   s_battery   = 85;
 
 /* ── Output helpers ──────────────────────────────────────────────────────── */
 
-static void transport_write(const void *data, size_t len)
+static void transport_write(const char *data, size_t len)
 {
 #if SOC_USB_SERIAL_JTAG_SUPPORTED
-    usb_serial_jtag_write_bytes(data, len, 0);
+    usb_serial_jtag_write_bytes((const uint8_t *)data, len, 0);
 #endif
     uart_write_bytes(UART_PORT, data, len);
 }
 
-static int transport_read_byte(uint8_t *byte, TickType_t ticks_to_wait)
+static int transport_read_byte(uint8_t *byte, uint32_t timeout_ms)
 {
 #if SOC_USB_SERIAL_JTAG_SUPPORTED
     int usb_n = usb_serial_jtag_read_bytes(byte, 1, 0);
@@ -133,7 +133,7 @@ static int transport_read_byte(uint8_t *byte, TickType_t ticks_to_wait)
         return usb_n;
     }
 #endif
-    return uart_read_bytes(UART_PORT, byte, 1, ticks_to_wait);
+    return uart_read_bytes(UART_PORT, byte, 1, pdMS_TO_TICKS(timeout_ms));
 }
 
 /*
@@ -571,7 +571,7 @@ void app_main(void)
     uint8_t byte;
 
     for (;;) {
-        int n = transport_read_byte(&byte, pdMS_TO_TICKS(10));
+        int n = transport_read_byte(&byte, 10);
         if (n <= 0) {
             continue;
         }
