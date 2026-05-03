@@ -149,14 +149,16 @@ static void transport_write(const char *data, size_t len)
 
 static int transport_read_byte(uint8_t *byte, uint32_t timeout_ms)
 {
+    int n;
+
 #if SOC_USB_SERIAL_JTAG_SUPPORTED
-    int n = usb_serial_jtag_read_bytes(byte, 1, timeout_ms);
+    n = usb_serial_jtag_read_bytes(byte, 1, timeout_ms);
     if (n > 0) {
         s_reply_transport = REPLY_TRANSPORT_USB;
         return n;
     }
 #endif
-    int n = uart_read_bytes(UART_PORT, byte, 1, pdMS_TO_TICKS(timeout_ms));
+    n = uart_read_bytes(UART_PORT, byte, 1, pdMS_TO_TICKS(timeout_ms));
     if (n > 0) {
         s_reply_transport = REPLY_TRANSPORT_UART;
     }
