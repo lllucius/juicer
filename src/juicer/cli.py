@@ -322,7 +322,7 @@ def service_install() -> None:
 
         install_service()
         click.echo("Service installed.")
-    except OSError as exc:
+    except Exception as exc:
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1)
 
@@ -335,7 +335,7 @@ def service_uninstall() -> None:
 
         uninstall_service()
         click.echo("Service uninstalled.")
-    except OSError as exc:
+    except Exception as exc:
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1)
 
@@ -348,7 +348,7 @@ def service_start() -> None:
 
         start_service()
         click.echo("Service started.")
-    except OSError as exc:
+    except Exception as exc:
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1)
 
@@ -361,7 +361,7 @@ def service_stop() -> None:
 
         stop_service()
         click.echo("Service stopped.")
-    except OSError as exc:
+    except Exception as exc:
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1)
 
@@ -374,7 +374,7 @@ def service_status_cmd() -> None:
 
         st = service_status()
         click.echo(f"Service status: {st}")
-    except OSError as exc:
+    except Exception as exc:
         click.echo(f"Error: {exc}", err=True)
         raise SystemExit(1)
 
