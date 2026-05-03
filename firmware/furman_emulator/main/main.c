@@ -45,26 +45,41 @@
 #include <string.h>
 #include <stdio.h>
 
+#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "driver/uart.h"
+#include "soc/soc_caps.h"
+
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+#include "driver/usb_serial_jtag.h"
+#endif
 
 /* ── Hardware configuration ──────────────────────────────────────────────── */
 
 /*
- * UART0 is connected to the USB-UART bridge on virtually all ESP32 dev
- * boards.  UART_PIN_NO_CHANGE keeps the default mapping (GPIO1/TX, GPIO3/RX).
+ * UART0 is connected to the USB-UART bridge on classic ESP32 dev boards.
+ * UART_PIN_NO_CHANGE keeps the default mapping (GPIO1/TX, GPIO3/RX).
  */
 #define UART_PORT      UART_NUM_0
 #define UART_BAUD      9600
 #define UART_RX_BUFSZ  512  /* ring-buffer size for the UART driver */
 
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+#define USB_RX_BUFSZ   512
+#define USB_TX_BUFSZ   512
+#endif
+
 /*
- * GPIO2 carries the built-in blue LED on most ESP32-DevKitC boards.
- * Adjust if your board uses a different pin (e.g. GPIO8 on ESP32-C3).
+ * GPIO2 carries the built-in LED on most ESP32 DevKit boards.
+ * ESP32-S3 DevKit boards commonly use GPIO48 instead.
  */
+#if CONFIG_IDF_TARGET_ESP32S3
+#define LED_GPIO       GPIO_NUM_48
+#else
 #define LED_GPIO       GPIO_NUM_2
+#endif
 
 /* ── Index helpers ───────────────────────────────────────────────────────── */
 
@@ -102,16 +117,35 @@ static int   s_battery   = 85;
 
 /* ── Output helpers ──────────────────────────────────────────────────────── */
 
+static void transport_write(const void *data, size_t len)
+{
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+    usb_serial_jtag_write_bytes(data, len, 0);
+#endif
+    uart_write_bytes(UART_PORT, data, len);
+}
+
+static int transport_read_byte(uint8_t *byte, TickType_t ticks_to_wait)
+{
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+    int usb_n = usb_serial_jtag_read_bytes(byte, 1, 0);
+    if (usb_n > 0) {
+        return usb_n;
+    }
+#endif
+    return uart_read_bytes(UART_PORT, byte, 1, ticks_to_wait);
+}
+
 /*
  * Send one response line followed by CR (and LF when LINEFEED mode is ON).
  * All Furman responses are CR-terminated; the host strips the CR when reading.
  */
 static void sendln(const char *s)
 {
-    uart_write_bytes(UART_PORT, s, strlen(s));
-    uart_write_bytes(UART_PORT, "\r", 1);
+    transport_write(s, strlen(s));
+    transport_write("\r", 1);
     if (s_linefeed) {
-        uart_write_bytes(UART_PORT, "\n", 1);
+        transport_write("\n", 1);
     }
 }
 
@@ -516,6 +550,14 @@ void app_main(void)
      */
     uart_driver_install(UART_PORT, UART_RX_BUFSZ, 0, 0, NULL, 0);
 
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+    usb_serial_jtag_driver_config_t usb_cfg = {
+        .tx_buffer_size = USB_TX_BUFSZ,
+        .rx_buffer_size = USB_RX_BUFSZ,
+    };
+    usb_serial_jtag_driver_install(&usb_cfg);
+#endif
+
     /* Blink the built-in LED once to signal that the emulator is ready. */
     gpio_reset_pin(LED_GPIO);
     gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
@@ -529,7 +571,7 @@ void app_main(void)
     uint8_t byte;
 
     for (;;) {
-        int n = uart_read_bytes(UART_PORT, &byte, 1, pdMS_TO_TICKS(10));
+        int n = transport_read_byte(&byte, pdMS_TO_TICKS(10));
         if (n <= 0) {
             continue;
         }
