@@ -2,7 +2,7 @@
 -r requirements.txt
 
 # Build
-nuitka>=2.0
+nuitka[onefile]>=2.0
 
 # Testing
 pytest>=8.0
