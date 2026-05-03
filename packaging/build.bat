@@ -3,6 +3,7 @@ REM ============================================================
 REM  Juicer Windows build script
 REM  Produces:  dist\juicer.exe      (CLI)
 REM             dist\juicer-gui.exe  (GUI)
+REM             dist\juicer-svc.exe  (Windows service)
 REM
 REM  Prerequisites (run once):
 REM    pip install -r requirements-dev.txt -r requirements-windows.txt
@@ -38,7 +39,7 @@ python -m nuitka ^
     --enable-plugin=pyside6 ^
     --include-package=juicer ^
     --nofollow-import-to=tkinter ^
-    --windows-disable-console ^
+    --windows-console-mode=disable ^
     --assume-yes-for-downloads ^
     src\juicer\gui.py
 if errorlevel 1 (
@@ -48,6 +49,25 @@ if errorlevel 1 (
 echo [juicer build] GUI build succeeded: dist\juicer-gui.exe
 
 echo.
+echo [juicer build] Building service executable...
+python -m nuitka ^
+    --onefile ^
+    --output-dir=dist ^
+    --output-filename=juicer-svc.exe ^
+    --include-package=juicer ^
+    --nofollow-import-to=PySide6 ^
+    --nofollow-import-to=tkinter ^
+    --windows-console-mode=disable ^
+    --assume-yes-for-downloads ^
+    src\juicer\service.py
+if errorlevel 1 (
+    echo [juicer build] ERROR: Service build failed.
+    exit /b 1
+)
+echo [juicer build] Service build succeeded: dist\juicer-svc.exe
+
+echo.
 echo [juicer build] All builds complete.
-echo   CLI : dist\juicer.exe
-echo   GUI : dist\juicer-gui.exe
+echo   CLI     : dist\juicer.exe
+echo   GUI     : dist\juicer-gui.exe
+echo   Service : dist\juicer-svc.exe

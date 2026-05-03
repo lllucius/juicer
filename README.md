@@ -261,7 +261,7 @@ pip install -r requirements-dev.txt -r requirements-windows.txt
 pip install -e .
 ```
 
-### Build both executables at once
+### Build all executables at once
 
 ```bat
 packaging\build.bat
@@ -287,9 +287,19 @@ python -m nuitka ^
     --enable-plugin=pyside6 ^
     --include-package=juicer ^
     --nofollow-import-to=tkinter ^
-    --windows-disable-console ^
+    --windows-console-mode=disable ^
     --assume-yes-for-downloads ^
     src\juicer\gui.py
+python -m nuitka ^
+    --onefile ^
+    --output-dir=dist ^
+    --output-filename=juicer-svc.exe ^
+    --include-package=juicer ^
+    --nofollow-import-to=PySide6 ^
+    --nofollow-import-to=tkinter ^
+    --windows-console-mode=disable ^
+    --assume-yes-for-downloads ^
+    src\juicer\service.py
 ```
 
 ### Output
@@ -298,8 +308,9 @@ python -m nuitka ^
 |------|-------------|
 | `dist\juicer.exe` | CLI — run in a Command Prompt |
 | `dist\juicer-gui.exe` | GUI — double-click to launch |
+| `dist\juicer-svc.exe` | Windows service executable |
 
-> **Tip**: The CLI and GUI executables are self-contained — no Python
+> **Tip**: All executables are self-contained — no Python
 > installation is needed on the target machine.
 
 ---
