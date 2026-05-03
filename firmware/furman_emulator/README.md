@@ -10,7 +10,7 @@ Windows service without real hardware.
 
 | Requirement | Notes |
 |-------------|-------|
-| ESP32 dev board | Any board with a USB-UART bridge (CP2102, CH340, …) and an ESP32, ESP32-S2, ESP32-S3, or ESP32-C3 SoC |
+| ESP32 dev board | Any board with an ESP32-family SoC. Classic ESP32 boards can use the USB-UART bridge; ESP32-S3 boards can use either UART0 or the native USB Serial/JTAG port. |
 | [ESP-IDF **v6.0**](https://github.com/espressif/esp-idf) | Follow the [official installation guide](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/index.html) |
 
 ---
@@ -69,14 +69,12 @@ idf.py -p COM3 flash
 
 ## Connecting to Juicer
 
-After flashing, the ESP32 appears as a virtual COM port through its
-on-board USB-UART bridge:
+After flashing, the ESP32 appears as a virtual COM port:
 
-| OS | Device name |
+| Board / connection | Device name |
 |----|------------|
-| Windows | `COMx` (check Device Manager) |
-| Linux | `/dev/ttyUSB0` or `/dev/ttyACM0` |
-| macOS | `/dev/cu.usbserial-*` or `/dev/cu.usbmodem*` |
+| Classic ESP32 boards with USB-UART bridge | `COMx`, `/dev/ttyUSB0`, `/dev/cu.usbserial-*` |
+| ESP32-S3 native USB Serial/JTAG | `COMx`, `/dev/ttyACM0`, `/dev/cu.usbmodem*` |
 
 Point Juicer at that port:
 
@@ -158,10 +156,12 @@ Sensor values are compile-time constants (`s_*` variables near the top of
 
 ## Notes
 
-* **UART0 / USB-UART bridge** — `main.c` uses UART0 (GPIO1/TX, GPIO3/RX),
-  the UART wired to the on-board USB-UART bridge on all standard dev boards.
-  `sdkconfig.defaults` sets `CONFIG_ESP_CONSOLE_NONE=y` so the IDF boot
-  messages and log output do not appear on UART0 and corrupt the protocol.
+* **UART0 and native USB on ESP32-S3** — `main.c` always enables UART0
+  (GPIO1/TX, GPIO3/RX).  On targets that support USB Serial/JTAG, such as the
+  ESP32-S3, it also listens on the native USB serial port so Juicer can talk
+  to the board without an external USB-UART bridge.  `sdkconfig.defaults`
+  sets `CONFIG_ESP_CONSOLE_NONE=y` so the IDF log output does not corrupt the
+  protocol stream.
 
 * **Using a different UART** — Change `#define UART_PORT UART_NUM_0` to
   `UART_NUM_1` (or `UART_NUM_2`) and update `uart_set_pin()` with the
@@ -172,9 +172,9 @@ Sensor values are compile-time constants (`s_*` variables near the top of
   (e.g. `esp32s3`, `esp32c3`) before `idf.py build`.  The emulator logic is
   target-agnostic; only `LED_GPIO` may need adjusting for your board.
 
-* **LED pin** — The ready-blink uses GPIO2 (`LED_GPIO` in `main.c`), which
-  is the built-in LED on most ESP32-DevKitC boards.  Change it if your board
-  uses a different pin (e.g. GPIO8 on ESP32-C3-DevKitM-1).
+* **LED pin** — The ready-blink defaults to GPIO2 on classic ESP32 boards and
+  GPIO48 on ESP32-S3 builds.  Change `LED_GPIO` in `main.c` if your board uses
+  a different pin.
 
 * **Baud rate** — Juicer's `SerialTransport` uses 9600 baud / 8-N-1 by
   default, matching `UART_BAUD` in `main.c`.  The USB-UART bridge presents a
