@@ -1,0 +1,4 @@
+# Disable the IDF console subsystem so that UART0 carries only the
+# Furman protocol traffic.  Without this, ESP-IDF would also write
+# boot/log messages to UART0 and corrupt the protocol stream.
+CONFIG_ESP_CONSOLE_NONE=y
