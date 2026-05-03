@@ -649,10 +649,40 @@ if _PYSIDE6_AVAILABLE:
             self._client: Any = None
             self._config = GlobalConfig()
 
-            # Central tab widget
+            # Central widget with tabs + bottom button row
+            central = QWidget()
+            central_layout = QVBoxLayout(central)
+            central_layout.setContentsMargins(4, 4, 4, 4)
+            central_layout.setSpacing(4)
+            self.setCentralWidget(central)
+
+            # Tab widget
             self.tabs = QTabWidget()
             self.tabs.setAccessibleName("Main Tab Navigation")
-            self.setCentralWidget(self.tabs)
+            central_layout.addWidget(self.tabs)
+
+            # Bottom button row
+            btn_row = QHBoxLayout()
+            btn_row.setContentsMargins(0, 0, 0, 0)
+
+            self.btn_save = QPushButton("Save Settings")
+            self.btn_save.setAccessibleName("Save Settings")
+            self.btn_save.clicked.connect(self._on_save_settings)
+            btn_row.addWidget(self.btn_save)
+
+            self.btn_reset = QPushButton("Reset to Defaults")
+            self.btn_reset.setAccessibleName("Reset to Defaults")
+            self.btn_reset.clicked.connect(self._on_reset_defaults)
+            btn_row.addWidget(self.btn_reset)
+
+            btn_row.addStretch()
+
+            self.btn_close = QPushButton("Close")
+            self.btn_close.setAccessibleName("Close Window")
+            self.btn_close.clicked.connect(self.close)
+            btn_row.addWidget(self.btn_close)
+
+            central_layout.addLayout(btn_row)
 
             # Create panels
             self.overview = OverviewPanel()
@@ -699,6 +729,26 @@ if _PYSIDE6_AVAILABLE:
 
             # Load default config
             self._load_config()
+
+        @Slot()
+        def _on_save_settings(self) -> None:
+            """Save current settings to config store."""
+            self._save_config()
+            self.status_bar.showMessage("Settings saved")
+
+        @Slot()
+        def _on_reset_defaults(self) -> None:
+            """Reset all settings to defaults after user confirmation."""
+            reply = QMessageBox.question(
+                self,
+                "Reset to Defaults",
+                "Reset all settings to their default values?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._apply_config(GlobalConfig())
+                self.status_bar.showMessage("Settings reset to defaults")
 
         def _load_config(self) -> None:
             """Try to load configuration from the appropriate store."""
