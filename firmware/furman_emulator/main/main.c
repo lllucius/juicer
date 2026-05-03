@@ -117,10 +117,22 @@ static int   s_battery   = 85;
 
 /* ── Output helpers ──────────────────────────────────────────────────────── */
 
+typedef enum {
+    REPLY_TRANSPORT_UART = 0,
+#if SOC_USB_SERIAL_JTAG_SUPPORTED
+    REPLY_TRANSPORT_USB,
+#endif
+} reply_transport_t;
+
+static reply_transport_t s_reply_transport = REPLY_TRANSPORT_UART;
+
 static void transport_write(const char *data, size_t len)
 {
 #if SOC_USB_SERIAL_JTAG_SUPPORTED
-    usb_serial_jtag_write_bytes((const uint8_t *)data, len, 0);
+    if (s_reply_transport == REPLY_TRANSPORT_USB) {
+        usb_serial_jtag_write_bytes((const uint8_t *)data, len, 10);
+        return;
+    }
 #endif
     uart_write_bytes(UART_PORT, data, len);
 }
@@ -128,11 +140,13 @@ static void transport_write(const char *data, size_t len)
 static int transport_read_byte(uint8_t *byte, uint32_t timeout_ms)
 {
 #if SOC_USB_SERIAL_JTAG_SUPPORTED
-    int usb_n = usb_serial_jtag_read_bytes(byte, 1, 0);
+    int usb_n = usb_serial_jtag_read_bytes(byte, 1, 1);
     if (usb_n > 0) {
+        s_reply_transport = REPLY_TRANSPORT_USB;
         return usb_n;
     }
 #endif
+    s_reply_transport = REPLY_TRANSPORT_UART;
     return uart_read_bytes(UART_PORT, byte, 1, pdMS_TO_TICKS(timeout_ms));
 }
 
