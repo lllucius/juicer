@@ -263,14 +263,14 @@ pip install -r requirements-dev.txt -r requirements-windows.txt
 ### Build both executables at once
 
 ```bat
-build\build.bat
+packaging\build.bat
 ```
 
 ### Build individually
 
 ```bat
-pyinstaller build\juicer_cli.spec --noconfirm --clean
-pyinstaller build\juicer_gui.spec --noconfirm --clean
+pyinstaller packaging\juicer_cli.spec --noconfirm --clean
+pyinstaller packaging\juicer_gui.spec --noconfirm --clean
 ```
 
 ### Output
@@ -301,7 +301,7 @@ juicer/
 │       ├── protocol.py     # Serial protocol (commands, responses, transport)
 │       ├── sequence.py     # Boot/shutdown sequencer
 │       └── service.py      # Windows service wrapper
-├── build/
+├── packaging/
 │   ├── juicer_cli.spec     # PyInstaller spec — CLI
 │   ├── juicer_gui.spec     # PyInstaller spec — GUI
 │   └── build.bat           # Windows build script
