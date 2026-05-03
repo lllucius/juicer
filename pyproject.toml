@@ -63,3 +63,17 @@ select = ["E", "F", "W", "I"]
 python_version = "3.11"
 strict = true
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# PySide6 is not installed in all environments; suppress class-subclassing-Any
+# and untyped-decorator errors that are benign here (all guarded by _PYSIDE6_AVAILABLE).
+module = "juicer.gui"
+disable_error_code = ["misc", "untyped-decorator"]
+
+[[tool.mypy.overrides]]
+# winreg and winsound are Windows-only stdlib modules.  Their typeshed stubs hide
+# all attributes behind sys.platform == "win32" guards, so attribute accesses
+# (OpenKey, PlaySound, etc.) would raise [attr-defined] on non-Windows.
+# All callers already guard execution with _ensure_windows() / platform checks.
+module = ["juicer.config", "juicer.sequence"]
+disable_error_code = ["attr-defined"]

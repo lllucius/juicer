@@ -29,10 +29,10 @@ SERVICE_DEPS = ["Serenum", "Serial"]
 
 if _WINDOWS:
     try:
-        import servicemanager  # type: ignore[import-not-found]
-        import win32event  # type: ignore[import-not-found]
-        import win32service  # type: ignore[import-not-found]
-        import win32serviceutil  # type: ignore[import-not-found]
+        import servicemanager
+        import win32event
+        import win32service
+        import win32serviceutil
 
         _PYWIN32_AVAILABLE = True
     except ImportError:
@@ -195,41 +195,41 @@ def install_service() -> None:
         serviceName=SERVICE_NAME,
         displayName=SERVICE_DISPLAY_NAME,
         description=SERVICE_DESCRIPTION,
-        startType=win32service.SERVICE_AUTO_START,  # type: ignore[name-defined]
+        startType=win32service.SERVICE_AUTO_START,
         serviceDeps=SERVICE_DEPS,
     )
     svc_exe = _find_service_exe()
     if svc_exe is not None:
         kwargs["exeName"] = svc_exe
-    win32serviceutil.InstallService(**kwargs)  # type: ignore[name-defined]
+    win32serviceutil.InstallService(**kwargs)
     logger.info("Service '%s' installed", SERVICE_NAME)
 
 
 def uninstall_service() -> None:
     """Remove the Juicer Windows service."""
     _ensure_pywin32()
-    win32serviceutil.RemoveService(SERVICE_NAME)  # type: ignore[name-defined]
+    win32serviceutil.RemoveService(SERVICE_NAME)
     logger.info("Service '%s' uninstalled", SERVICE_NAME)
 
 
 def start_service() -> None:
     """Start the Juicer service."""
     _ensure_pywin32()
-    win32serviceutil.StartService(SERVICE_NAME)  # type: ignore[name-defined]
+    win32serviceutil.StartService(SERVICE_NAME)
     logger.info("Service '%s' started", SERVICE_NAME)
 
 
 def stop_service() -> None:
     """Stop the Juicer service."""
     _ensure_pywin32()
-    win32serviceutil.StopService(SERVICE_NAME)  # type: ignore[name-defined]
+    win32serviceutil.StopService(SERVICE_NAME)
     logger.info("Service '%s' stopped", SERVICE_NAME)
 
 
 def restart_service() -> None:
     """Restart the Juicer service."""
     _ensure_pywin32()
-    win32serviceutil.RestartService(SERVICE_NAME)  # type: ignore[name-defined]
+    win32serviceutil.RestartService(SERVICE_NAME)
     logger.info("Service '%s' restarted", SERVICE_NAME)
 
 
@@ -240,17 +240,17 @@ def service_status() -> str:
     """
     _ensure_pywin32()
     try:
-        status = win32serviceutil.QueryServiceStatus(SERVICE_NAME)  # type: ignore[name-defined]
+        status = win32serviceutil.QueryServiceStatus(SERVICE_NAME)
         state_map = {
-            win32service.SERVICE_STOPPED: "STOPPED",  # type: ignore[name-defined]
-            win32service.SERVICE_START_PENDING: "START_PENDING",  # type: ignore[name-defined]
-            win32service.SERVICE_STOP_PENDING: "STOP_PENDING",  # type: ignore[name-defined]
-            win32service.SERVICE_RUNNING: "RUNNING",  # type: ignore[name-defined]
-            win32service.SERVICE_CONTINUE_PENDING: "CONTINUE_PENDING",  # type: ignore[name-defined]
-            win32service.SERVICE_PAUSE_PENDING: "PAUSE_PENDING",  # type: ignore[name-defined]
-            win32service.SERVICE_PAUSED: "PAUSED",  # type: ignore[name-defined]
+            win32service.SERVICE_STOPPED: "STOPPED",
+            win32service.SERVICE_START_PENDING: "START_PENDING",
+            win32service.SERVICE_STOP_PENDING: "STOP_PENDING",
+            win32service.SERVICE_RUNNING: "RUNNING",
+            win32service.SERVICE_CONTINUE_PENDING: "CONTINUE_PENDING",
+            win32service.SERVICE_PAUSE_PENDING: "PAUSE_PENDING",
+            win32service.SERVICE_PAUSED: "PAUSED",
         }
-        return state_map.get(status[1], f"UNKNOWN ({status[1]})")  # type: ignore[index]
+        return state_map.get(status[1], f"UNKNOWN ({status[1]})")
     except Exception as exc:
         return f"ERROR: {exc}"
 
@@ -258,7 +258,7 @@ def service_status() -> str:
 def run_debug() -> None:
     """Run the service in debug/console mode (not as an SCM service)."""
     _ensure_pywin32()
-    win32serviceutil.HandleCommandLine(JuicerService)  # type: ignore[arg-type]
+    win32serviceutil.HandleCommandLine(JuicerService)
 
 
 if __name__ == "__main__":
@@ -266,7 +266,7 @@ if __name__ == "__main__":
     # Delegates to pywin32's HandleCommandLine which registers this executable
     # with the Service Control Manager and handles start/stop/install commands.
     if _PYWIN32_AVAILABLE:
-        win32serviceutil.HandleCommandLine(JuicerService)  # type: ignore[arg-type]
+        win32serviceutil.HandleCommandLine(JuicerService)
     else:
         import sys as _sys
 

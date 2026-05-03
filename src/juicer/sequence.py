@@ -47,7 +47,7 @@ def _play_sound(path: str) -> None:
         return
     if platform.system() == "Windows":
         try:
-            import winsound  # type: ignore[import-not-found]
+            import winsound
 
             winsound.PlaySound(path, winsound.SND_FILENAME)
             logger.info("Played sound: %s", path)

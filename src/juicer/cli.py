@@ -5,7 +5,6 @@ Entry point: ``juicer`` (or ``python -m juicer``).
 
 from __future__ import annotations
 
-import json
 import logging
 import sys
 
@@ -50,7 +49,7 @@ def main(ctx: click.Context, verbose: bool) -> None:
 def ports() -> None:
     """List available serial ports."""
     try:
-        from serial.tools.list_ports import comports  # type: ignore[import-untyped]
+        from serial.tools.list_ports import comports
 
         found = list(comports())
         if not found:

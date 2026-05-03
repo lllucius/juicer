@@ -13,7 +13,7 @@ import logging
 import platform
 from enum import IntEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -80,7 +80,7 @@ class SequenceConfig(BaseModel):
 
     def bank(self, n: int) -> BankConfig:
         """Get bank config by number (1–4)."""
-        return getattr(self, f"bank{n}")
+        return cast(BankConfig, getattr(self, f"bank{n}"))
 
     def set_bank(self, n: int, cfg: BankConfig) -> None:
         """Set bank config by number (1–4)."""
@@ -202,7 +202,7 @@ class WindowsRegistryStore(ConfigStore):
 
         Returns ``(SequenceConfig, common_values_dict)``.
         """
-        import winreg  # type: ignore[import-not-found]
+        import winreg
 
         key_path = f"{REG_ROOT}\\{subkey}"
         common: dict[str, Any] = {}
@@ -242,7 +242,7 @@ class WindowsRegistryStore(ConfigStore):
         self, subkey: str, seq: SequenceConfig, common: dict[str, Any]
     ) -> None:
         """Write a single sequence to registry, creating keys as needed."""
-        import winreg  # type: ignore[import-not-found]
+        import winreg
 
         key_path = f"{REG_ROOT}\\{subkey}"
         key = winreg.CreateKeyEx(
@@ -315,7 +315,7 @@ class WindowsRegistryStore(ConfigStore):
 
     @staticmethod
     def _read_dword(key: Any, name: str, default: int) -> int:
-        import winreg  # type: ignore[import-not-found]
+        import winreg
 
         try:
             value, reg_type = winreg.QueryValueEx(key, name)
@@ -327,7 +327,7 @@ class WindowsRegistryStore(ConfigStore):
 
     @staticmethod
     def _read_dword_optional(key: Any, name: str) -> int | None:
-        import winreg  # type: ignore[import-not-found]
+        import winreg
 
         try:
             value, reg_type = winreg.QueryValueEx(key, name)
@@ -339,7 +339,7 @@ class WindowsRegistryStore(ConfigStore):
 
     @staticmethod
     def _read_sz(key: Any, name: str, default: str) -> str:
-        import winreg  # type: ignore[import-not-found]
+        import winreg
 
         try:
             value, reg_type = winreg.QueryValueEx(key, name)
