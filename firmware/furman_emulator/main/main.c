@@ -115,8 +115,15 @@ static float s_current   = 0.65f;
 static float s_voltage   = 230.0f;
 static float s_load      = 10.0f;
 static int   s_battery   = 85;
-static int   s_battstate = 0;    /* 0=FULL  1=CHARGE  2=DISCHARGE */
 static int   s_backup_time = 60; /* minutes of backup remaining */
+
+typedef enum {
+    BATTSTATE_FULL       = 0,
+    BATTSTATE_CHARGE     = 1,
+    BATTSTATE_DISCHARGE  = 2,
+} battstate_t;
+
+static battstate_t s_battstate = BATTSTATE_FULL;
 
 /* ── Output helpers ──────────────────────────────────────────────────────── */
 
@@ -452,7 +459,11 @@ static void handle_query_batterystat(void)
 
 static void handle_query_battstate(void)
 {
-    static const char *states[] = { "FULL", "CHARGE", "DISCHARGE" };
+    static const char *states[] = {
+        [BATTSTATE_FULL]      = "FULL",
+        [BATTSTATE_CHARGE]    = "CHARGE",
+        [BATTSTATE_DISCHARGE] = "DISCHARGE",
+    };
     char tmp[32];
     snprintf(tmp, sizeof(tmp), "$BATTSTATE = %s", states[s_battstate]);
     sendln(tmp);
