@@ -14,7 +14,7 @@ import logging
 import re
 import time
 from collections import deque
-from typing import Any, Callable, Sequence
+from typing import Any, Sequence
 
 from pydantic import BaseModel, Field
 
@@ -677,6 +677,7 @@ class SerialTransport(Transport):
         self.retries = retries
         self.retry_delay = retry_delay
         self._serial: Any = None
+        self._pending_byte: bytes = b""
 
     def open(self) -> None:
         """Open serial port with retry logic matching C++ (50 × 100 ms)."""
@@ -708,6 +709,7 @@ class SerialTransport(Transport):
             self._serial.close()
             logger.info("Closed serial port %s", self.port)
         self._serial = None
+        self._pending_byte = b""
 
     def write(self, data: str) -> None:
         if not self._serial or not self._serial.is_open:
@@ -721,17 +723,18 @@ class SerialTransport(Transport):
         buf = bytearray()
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            b = self._serial.read(1)
+            if self._pending_byte:
+                b = self._pending_byte
+                self._pending_byte = b""
+            else:
+                b = self._serial.read(1)
             if not b:
                 continue
             if b[0] == 0x0D:  # CR — end of line
                 # Peek for optional LF
                 peek = self._serial.read(1)
                 if peek and peek[0] != 0x0A:
-                    # Not LF — we consumed a byte we shouldn't have.
-                    # Push it back isn't easy with pyserial, so buffer it.
-                    # In practice the UPS either always sends LF or never does.
-                    pass
+                    self._pending_byte = peek
                 return buf.decode("ascii", errors="replace")
             buf.append(b[0])
         raise TimeoutError(f"No CR-terminated line within {timeout}s")
