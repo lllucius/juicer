@@ -71,7 +71,7 @@ idf.py -p COM3 flash
 
 After flashing, the ESP32 appears as a virtual COM port:
 
-| OS | Device name |
+| Board / connection | Device name |
 |----|------------|
 | Classic ESP32 boards with USB-UART bridge | `COMx`, `/dev/ttyUSB0`, `/dev/cu.usbserial-*` |
 | ESP32-S3 native USB Serial/JTAG | `COMx`, `/dev/ttyACM0`, `/dev/cu.usbmodem*` |

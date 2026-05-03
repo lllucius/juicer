@@ -140,10 +140,10 @@ static void transport_write(const char *data, size_t len)
 static int transport_read_byte(uint8_t *byte, uint32_t timeout_ms)
 {
 #if SOC_USB_SERIAL_JTAG_SUPPORTED
-    int usb_n = usb_serial_jtag_read_bytes(byte, 1, 1);
-    if (usb_n > 0) {
+    int n = usb_serial_jtag_read_bytes(byte, 1, 1);
+    if (n > 0) {
         s_reply_transport = REPLY_TRANSPORT_USB;
-        return usb_n;
+        return n;
     }
 #endif
     s_reply_transport = REPLY_TRANSPORT_UART;
