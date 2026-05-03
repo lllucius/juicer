@@ -14,7 +14,7 @@ import logging
 import re
 import time
 from collections import deque
-from typing import Any, Callable, Sequence
+from typing import Any, Sequence
 
 from pydantic import BaseModel, Field
 
