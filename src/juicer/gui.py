@@ -24,11 +24,20 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Optional
 
+from juicer.config import (
+    BankAction,
+    BankConfig,
+    ConfigStore,
+    GlobalConfig,
+    JsonStore,
+    SequenceConfig,
+)
+
 logger = logging.getLogger(__name__)
 
 # Guard PySide6 import for environments where it's not installed
 try:
-    from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
+    from PySide6.QtCore import QObject, Signal, Slot
     from PySide6.QtWidgets import (
         QApplication,
         QComboBox,
@@ -38,7 +47,6 @@ try:
         QGroupBox,
         QHBoxLayout,
         QLabel,
-        QLineEdit,
         QMainWindow,
         QMessageBox,
         QPushButton,
@@ -53,14 +61,6 @@ try:
     _PYSIDE6_AVAILABLE = True
 except ImportError:
     _PYSIDE6_AVAILABLE = False
-
-from juicer.config import (
-    BankAction,
-    BankConfig,
-    GlobalConfig,
-    JsonStore,
-    SequenceConfig,
-)
 
 # ──────────────────────────────────────────────────────────────────────
 # Logging handler that emits to GUI
@@ -247,7 +247,7 @@ if _PYSIDE6_AVAILABLE:
         def _refresh_ports(self) -> None:
             self.combo_port.clear()
             try:
-                from serial.tools.list_ports import comports  # type: ignore[import-untyped]
+                from serial.tools.list_ports import comports
 
                 for port_info in comports():
                     self.combo_port.addItem(
@@ -753,6 +753,7 @@ if _PYSIDE6_AVAILABLE:
         def _load_config(self) -> None:
             """Try to load configuration from the appropriate store."""
             try:
+                store: ConfigStore
                 if platform.system() == "Windows":
                     from juicer.config import WindowsRegistryStore
 
@@ -783,6 +784,7 @@ if _PYSIDE6_AVAILABLE:
             self._config.boot = self.boot_editor.get_sequence_config()
             self._config.shutdown = self.shutdown_editor.get_sequence_config()
             try:
+                store: ConfigStore
                 if platform.system() == "Windows":
                     from juicer.config import WindowsRegistryStore
 
