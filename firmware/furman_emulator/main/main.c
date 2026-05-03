@@ -69,6 +69,7 @@
 #if SOC_USB_SERIAL_JTAG_SUPPORTED
 #define USB_RX_BUFSZ   512
 #define USB_TX_BUFSZ   512
+#define USB_IO_TIMEOUT_MS 10
 #endif
 
 /*
@@ -130,7 +131,7 @@ static void transport_write(const char *data, size_t len)
 {
 #if SOC_USB_SERIAL_JTAG_SUPPORTED
     if (s_reply_transport == REPLY_TRANSPORT_USB) {
-        usb_serial_jtag_write_bytes((const uint8_t *)data, len, 10);
+        usb_serial_jtag_write_bytes((const uint8_t *)data, len, USB_IO_TIMEOUT_MS);
         return;
     }
 #endif
@@ -146,8 +147,11 @@ static int transport_read_byte(uint8_t *byte, uint32_t timeout_ms)
         return n;
     }
 #endif
-    s_reply_transport = REPLY_TRANSPORT_UART;
-    return uart_read_bytes(UART_PORT, byte, 1, pdMS_TO_TICKS(timeout_ms));
+    int n = uart_read_bytes(UART_PORT, byte, 1, pdMS_TO_TICKS(timeout_ms));
+    if (n > 0) {
+        s_reply_transport = REPLY_TRANSPORT_UART;
+    }
+    return n;
 }
 
 /*
