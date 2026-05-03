@@ -174,10 +174,23 @@ else:
 # ──────────────────────────────────────────────────────────────────────
 
 
+def _find_service_exe() -> str | None:
+    """Return the path to juicer-svc.exe if it exists alongside the current executable.
+
+    When the CLI (juicer.exe) installs the service, the Windows Service Control Manager
+    must be pointed at the dedicated service host binary (juicer-svc.exe), not the CLI.
+    """
+    import os
+
+    current_dir = os.path.dirname(os.path.abspath(sys.executable))
+    svc_exe = os.path.join(current_dir, "juicer-svc.exe")
+    return svc_exe if os.path.isfile(svc_exe) else None
+
+
 def install_service() -> None:
     """Install the Juicer Windows service."""
     _ensure_pywin32()
-    win32serviceutil.InstallService(  # type: ignore[name-defined]
+    kwargs: dict[str, object] = dict(
         pythonClassString=f"{__name__}.JuicerService",
         serviceName=SERVICE_NAME,
         displayName=SERVICE_DISPLAY_NAME,
@@ -185,6 +198,10 @@ def install_service() -> None:
         startType=win32service.SERVICE_AUTO_START,  # type: ignore[name-defined]
         serviceDeps=SERVICE_DEPS,
     )
+    svc_exe = _find_service_exe()
+    if svc_exe is not None:
+        kwargs["exeName"] = svc_exe
+    win32serviceutil.InstallService(**kwargs)  # type: ignore[name-defined]
     logger.info("Service '%s' installed", SERVICE_NAME)
 
 
@@ -242,3 +259,20 @@ def run_debug() -> None:
     """Run the service in debug/console mode (not as an SCM service)."""
     _ensure_pywin32()
     win32serviceutil.HandleCommandLine(JuicerService)  # type: ignore[arg-type]
+
+
+if __name__ == "__main__":
+    # Entry point for juicer-svc.exe.
+    # Delegates to pywin32's HandleCommandLine which registers this executable
+    # with the Service Control Manager and handles start/stop/install commands.
+    if _PYWIN32_AVAILABLE:
+        win32serviceutil.HandleCommandLine(JuicerService)  # type: ignore[arg-type]
+    else:
+        import sys as _sys
+
+        print(
+            "pywin32 is required for service operations. "
+            "Install with: pip install pywin32",
+            file=_sys.stderr,
+        )
+        _sys.exit(1)
