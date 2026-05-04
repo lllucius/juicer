@@ -922,6 +922,30 @@ def test_client_query_outlet_status() -> None:
     assert result.banks[4] == BankState.OFF
 
 
+def test_client_query_outlet_status_wrong_response_raises() -> None:
+    t = _open_fake(
+        "$BANK 1 = ON",
+        "$BANK 2 = OFF",
+        "$INVALID_PARAMETER",
+        "$BANK 4 = OFF",
+    )
+    client = JuicerClient(t)
+    with pytest.raises(ProtocolError, match=r"\?OUTLETSTAT"):
+        client.query_outlet_status()
+
+
+def test_client_query_outlet_status_missing_bank_raises() -> None:
+    t = _open_fake(
+        "$BANK 1 = ON",
+        "$BANK 2 = OFF",
+        "$BANK 2 = ON",
+        "$BANK 4 = OFF",
+    )
+    client = JuicerClient(t)
+    with pytest.raises(ProtocolError, match="3"):
+        client.query_outlet_status()
+
+
 def test_client_query_power_status() -> None:
     t = _open_fake("$PWR = NORMAL")
     client = JuicerClient(t)
@@ -958,10 +982,22 @@ def test_client_query_power_missing_field_raises() -> None:
         "$VOLTS_IN = 230.0",
         "$VOLTS_OUT = 230.0",
         "$WATTS = 150.0",
-        "$INVALID_PARAMETER",
+        "$WATTS = 200.0",
     )
     client = JuicerClient(t)
     with pytest.raises(ProtocolError, match="current"):
+        client.query_power()
+
+
+def test_client_query_power_wrong_response_raises() -> None:
+    t = _open_fake(
+        "$VOLTS_IN = 230.0",
+        "$VOLTS_OUT = 230.0",
+        "$WATTS = 150.0",
+        "$INVALID_PARAMETER",
+    )
+    client = JuicerClient(t)
+    with pytest.raises(ProtocolError, match=r"\?POWER"):
         client.query_power()
 
 
