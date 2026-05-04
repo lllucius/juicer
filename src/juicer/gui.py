@@ -266,7 +266,8 @@ if _PYSIDE6_AVAILABLE:
 
         def current_port(self) -> str:
             idx = self.combo_port.currentIndex()
-            return str(self.combo_port.itemData(idx) or self.combo_port.currentText().split(" —")[0])
+            port = self.combo_port.itemData(idx) or self.combo_port.currentText().split(" —")[0]
+            return str(port)
 
         def available_ports(self) -> set[str]:
             ports: set[str] = set()
@@ -307,11 +308,17 @@ if _PYSIDE6_AVAILABLE:
 
             self.edit_start_sound = QLineEdit()
             self.edit_start_sound.setAccessibleName("Startup Sound Path")
-            form.addRow("Startup Sound:", self._path_row(self.edit_start_sound, "Browse Startup Sound"))
+            form.addRow(
+                "Startup Sound:",
+                self._path_row(self.edit_start_sound, "Browse Startup Sound"),
+            )
 
             self.edit_stop_sound = QLineEdit()
             self.edit_stop_sound.setAccessibleName("Shutdown Sound Path")
-            form.addRow("Shutdown Sound:", self._path_row(self.edit_stop_sound, "Browse Shutdown Sound"))
+            form.addRow(
+                "Shutdown Sound:",
+                self._path_row(self.edit_stop_sound, "Browse Shutdown Sound"),
+            )
 
             layout.addWidget(group)
 
