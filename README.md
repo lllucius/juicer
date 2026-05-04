@@ -65,7 +65,7 @@ cd juicer
 ./scripts/install-uv.sh --gui
 
 # PowerShell: automatically install uv if needed and include Windows-specific dependencies
-pwsh -ExecutionPolicy Bypass -File scripts/install-uv.ps1 -Windows
+pwsh -File scripts/install-uv.ps1 -Windows
 ```
 
 Activate the environment before running Juicer:
@@ -80,6 +80,13 @@ On Windows PowerShell:
 ```powershell
 .venv\Scripts\Activate.ps1
 juicer --help
+```
+
+If PowerShell blocks the local installer script after cloning or downloading the
+repository, unblock that script once before running it:
+
+```powershell
+Unblock-File scripts/install-uv.ps1
 ```
 
 ### Manual uv install
@@ -102,7 +109,7 @@ On Windows, use `.venv\Scripts\python.exe` as the `--python` path.
 # With GUI support:
 ./scripts/install-uv.sh --dev --gui
 # Windows:
-pwsh -ExecutionPolicy Bypass -File scripts/install-uv.ps1 -Dev -Windows
+pwsh -File scripts/install-uv.ps1 -Dev -Windows
 ```
 
 ---

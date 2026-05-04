@@ -32,6 +32,17 @@ function Get-UvPath {
     return $null
 }
 
+function Format-PathForComparison {
+    param([string]$Path)
+
+    try {
+        return [System.IO.Path]::GetFullPath($Path).TrimEnd("\").ToLowerInvariant()
+    }
+    catch {
+        return $Path.TrimEnd("\").ToLowerInvariant()
+    }
+}
+
 $Uv = Get-UvPath
 if (-not $Uv) {
     Write-Host "uv is not installed; installing uv..."
@@ -39,7 +50,10 @@ if (-not $Uv) {
 
     if ($HOME) {
         $UvBin = Join-Path $HOME ".local\bin"
-        if ((Test-Path $UvBin) -and (($env:PATH -split ";") -inotcontains $UvBin)) {
+        $PathEntries = $env:PATH -split ";" | Where-Object { $_ } | ForEach-Object {
+            Format-PathForComparison $_
+        }
+        if ((Test-Path $UvBin) -and ($PathEntries -notcontains (Format-PathForComparison $UvBin))) {
             $env:PATH = "$UvBin;$env:PATH"
         }
     }
