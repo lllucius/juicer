@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import platform
 import sys
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -108,22 +109,32 @@ if _PYWIN32_AVAILABLE:
             self.stop_event = win32event.CreateEvent(None, True, False, None)
 
         def SvcDoRun(self) -> None:
-            """Main service entry: boot → wait → shutdown."""
+            """Main service entry: boot → wait → shutdown.
+
+            The boot sequence is run in a background thread so that the service
+            reports SERVICE_RUNNING to the SCM immediately.  Without this, a
+            boot sequence whose delays exceed the SCM timeout (30 s) causes:
+            "A timeout was reached while waiting for the service to connect."
+            """
             try:
                 self.ReportServiceStatus(win32service.SERVICE_START_PENDING, waitHint=5000)
-                servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Running boot sequence")
 
-                try:
-                    _run_boot_sequence()
-                except Exception as exc:
-                    servicemanager.LogErrorMsg(f"{SERVICE_NAME}: Boot failed: {exc}")
-                    logger.error("Boot sequence failed: %s", exc)
+                # Launch boot sequence in background so SCM sees RUNNING right away.
+                boot_thread = threading.Thread(
+                    target=self._run_boot,
+                    name="juicer-boot",
+                    daemon=True,
+                )
+                boot_thread.start()
 
                 self.ReportServiceStatus(win32service.SERVICE_RUNNING)
                 servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Service running")
 
                 # Block until stop event is signalled
                 win32event.WaitForSingleObject(self.stop_event, win32event.INFINITE)
+
+                # Ensure boot sequence has finished before running shutdown.
+                boot_thread.join()
 
                 # Run shutdown sequence after stop event
                 servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Running shutdown sequence")
@@ -136,6 +147,15 @@ if _PYWIN32_AVAILABLE:
             finally:
                 self.ReportServiceStatus(win32service.SERVICE_STOPPED)
                 servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Service stopped")
+
+        def _run_boot(self) -> None:
+            """Run the boot sequence in a background thread."""
+            servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Running boot sequence")
+            try:
+                _run_boot_sequence()
+            except Exception as exc:
+                servicemanager.LogErrorMsg(f"{SERVICE_NAME}: Boot failed: {exc}")
+                logger.error("Boot sequence failed: %s", exc)
 
         def SvcStop(self) -> None:
             """Handle SERVICE_CONTROL_STOP."""
