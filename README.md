@@ -64,7 +64,7 @@ cd juicer
 # Optional GUI support
 ./scripts/install-uv.sh --gui
 
-# Windows: install uv if needed, then include Windows-specific dependencies
+# PowerShell: automatically install uv if needed and include Windows-specific dependencies
 pwsh -ExecutionPolicy Bypass -File scripts/install-uv.ps1 -Windows
 ```
 

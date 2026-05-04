@@ -39,14 +39,14 @@ if (-not $Uv) {
 
     if ($HOME) {
         $UvBin = Join-Path $HOME ".local\bin"
-        if ((Test-Path $UvBin) -and (($env:PATH -split ";") -notcontains $UvBin)) {
+        if ((Test-Path $UvBin) -and (($env:PATH -split ";") -inotcontains $UvBin)) {
             $env:PATH = "$UvBin;$env:PATH"
         }
     }
 
     $Uv = Get-UvPath
     if (-not $Uv) {
-        Write-Error "uv was installed, but the uv executable was not found. Open a new PowerShell session and run this script again."
+        Write-Error "uv was installed, but the uv executable was not found in PATH or the expected .local\bin directory."
     }
 }
 
