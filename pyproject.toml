@@ -29,10 +29,12 @@ dependencies = [
     "click>=8.1",
     "pydantic>=2.0",
     "pyserial>=3.5",
-    "PySide6>=6.6",
 ]
 
 [project.optional-dependencies]
+gui = [
+    "PySide6>=6.6",
+]
 windows = [
     "pywin32>=306",
 ]
@@ -45,6 +47,7 @@ dev = [
 
 [project.scripts]
 juicer = "juicer.cli:main"
+juicer-svc = "juicer.service:main"
 
 [project.gui-scripts]
 juicer-gui = "juicer.gui:main"

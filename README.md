@@ -36,7 +36,7 @@ Juicer provides:
 | click       | ≥ 8.1   |
 | pydantic    | ≥ 2.0   |
 | pyserial    | ≥ 3.5   |
-| PySide6     | ≥ 6.6   |
+| PySide6 *(GUI extra only)* | ≥ 6.6 |
 | pywin32 *(Windows service/registry only)* | ≥ 306 |
 
 A Furman F1500-UPS E connected via a null-modem RS-232 cable is required for
@@ -57,6 +57,9 @@ cd juicer
 # Install core dependencies
 pip install -r requirements.txt
 
+# Optional GUI support
+pip install ".[gui]"
+
 # Windows: also install Windows-specific dependencies
 pip install -r requirements-windows.txt
 
@@ -68,6 +71,8 @@ pip install .
 
 ```bash
 pip install -e ".[dev]"
+# With GUI support:
+pip install -e ".[dev,gui]"
 # Windows:
 pip install -e ".[dev,windows]"
 ```

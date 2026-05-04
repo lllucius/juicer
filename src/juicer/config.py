@@ -15,7 +15,7 @@ from enum import IntEnum
 from pathlib import Path
 from typing import Any, cast
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -62,13 +62,6 @@ class BankConfig(BaseModel):
     pre_delay_ms: int = Field(default=0, ge=0, description="Milliseconds before action")
     post_delay_ms: int = Field(default=0, ge=0, description="Milliseconds after action")
 
-    @field_validator("pre_delay_ms", "post_delay_ms")
-    @classmethod
-    def _reject_negative(cls, v: int) -> int:
-        if v < 0:
-            raise ValueError("Delay cannot be negative")
-        return v
-
 
 class SequenceConfig(BaseModel):
     """Per-sequence (boot or shutdown) configuration for all four banks."""
@@ -80,10 +73,14 @@ class SequenceConfig(BaseModel):
 
     def bank(self, n: int) -> BankConfig:
         """Get bank config by number (1–4)."""
+        if n not in range(1, 5):
+            raise ValueError(f"Bank number must be 1-4, got {n}")
         return cast(BankConfig, getattr(self, f"bank{n}"))
 
     def set_bank(self, n: int, cfg: BankConfig) -> None:
         """Set bank config by number (1–4)."""
+        if n not in range(1, 5):
+            raise ValueError(f"Bank number must be 1-4, got {n}")
         setattr(self, f"bank{n}", cfg)
 
 
@@ -99,14 +96,8 @@ class GlobalConfig(BaseModel):
 
     @field_validator("port")
     @classmethod
-    def _validate_port(cls, v: str) -> str:
-        if not v or not v.strip():
-            raise ValueError("Port must not be empty")
+    def _strip_port(cls, v: str) -> str:
         return v.strip()
-
-    @model_validator(mode="after")
-    def _validate_config(self) -> "GlobalConfig":
-        return self
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -279,7 +270,11 @@ class WindowsRegistryStore(ConfigStore):
             winreg.CloseKey(key)
 
     def load(self) -> GlobalConfig:
-        """Load configuration from both boot and shutdown registry keys."""
+        """Load configuration from both registry keys.
+
+        Global values (port, verbosity, sounds) are read from the boot subkey when
+        present; shutdown values are used only as a fallback for legacy layouts.
+        """
         self._ensure_windows()
 
         boot_seq, boot_common = self._read_sequence(REG_BOOT_SUBKEY)
