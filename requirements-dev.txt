@@ -1,8 +1,5 @@
-# Development and build dependencies
+# Development dependencies
 -r requirements.txt
-
-# Build
-nuitka[onefile]>=2.0
 
 # Testing
 pytest>=8.0

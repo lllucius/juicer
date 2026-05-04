@@ -39,7 +39,6 @@ windows = [
     "pywin32>=306",
 ]
 dev = [
-    "nuitka[onefile]>=2.0",
     "pytest>=8.0",
     "ruff>=0.4",
     "mypy>=1.10",
@@ -47,7 +46,6 @@ dev = [
 
 [project.scripts]
 juicer = "juicer.cli:main"
-juicer-svc = "juicer.service:main"
 
 [project.gui-scripts]
 juicer-gui = "juicer.gui:main"
