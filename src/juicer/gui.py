@@ -255,9 +255,8 @@ if _PYSIDE6_AVAILABLE:
                     )
             except ImportError:
                 self.combo_port.addItem("COM3", "COM3")
-            if current_port:
-                if not self.set_current_port(current_port, add_if_missing=False):
-                    logger.info("Previously selected port is no longer available: %s", current_port)
+            if current_port and not self.set_current_port(current_port, add_if_missing=False):
+                logger.info("Previously selected port is no longer available: %s", current_port)
 
         def _on_connect(self) -> None:
             port = self.current_port()
@@ -906,11 +905,11 @@ if _PYSIDE6_AVAILABLE:
             """Connect to the saved port on startup when it is present."""
             port = self._config.port.strip()
             if not port:
-                logger.info("No saved serial port configured; skipping startup connection")
+                logger.info("No serial port configured for startup connection")
                 return
             if not self.serial_settings.set_current_port(port, add_if_missing=False):
                 logger.info(
-                    "Saved serial port is not available; skipping startup connection: %s",
+                    "Configured serial port not available for startup connection: %s",
                     port,
                 )
                 return
