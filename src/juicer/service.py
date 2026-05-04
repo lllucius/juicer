@@ -210,9 +210,24 @@ def _find_service_exe() -> str | None:
     When the CLI (juicer.exe) installs the service, the Windows Service Control Manager
     must be pointed at the dedicated service host binary (juicer-svc.exe), not the CLI.
     """
-    current_dir = os.path.dirname(os.path.abspath(sys.executable))
-    svc_exe = os.path.join(current_dir, "juicer-svc.exe")
-    return svc_exe if os.path.isfile(svc_exe) else None
+    candidate_dirs = [os.path.dirname(os.path.abspath(sys.executable))]
+    if sys.argv and sys.argv[0]:
+        candidate_dirs.append(os.path.dirname(os.path.abspath(sys.argv[0])))
+
+    seen_dirs: set[str] = set()
+    for candidate_dir in candidate_dirs:
+        if candidate_dir in seen_dirs:
+            continue
+        seen_dirs.add(candidate_dir)
+        svc_exe = os.path.join(candidate_dir, "juicer-svc.exe")
+        if os.path.isfile(svc_exe):
+            return svc_exe
+    return None
+
+
+def _running_from_standalone_executable() -> bool:
+    executable_name = os.path.basename(sys.executable).lower()
+    return executable_name not in {"python", "python.exe", "pythonw", "pythonw.exe"}
 
 
 def _find_pythonservice_exe() -> str | None:
@@ -260,6 +275,14 @@ def install_service() -> None:
         pythonservice_exe = _find_pythonservice_exe()
         if pythonservice_exe is not None:
             kwargs["exeName"] = pythonservice_exe
+        elif _running_from_standalone_executable():
+            executable_dir = os.path.dirname(os.path.abspath(sys.executable))
+            raise FileNotFoundError(
+                "Cannot install the Juicer service from this standalone executable "
+                "because juicer-svc.exe was not found next to it. Build and keep "
+                f"{os.path.join(executable_dir, 'juicer-svc.exe')} alongside "
+                f"{sys.executable}, then run service install again."
+            )
     win32serviceutil.InstallService(**kwargs)
     logger.info("Service '%s' installed", SERVICE_NAME)
 

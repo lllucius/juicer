@@ -256,6 +256,10 @@ juicer service start
 
 > **Note**: service installation requires an **elevated (Administrator)**
 > command prompt.
+>
+> When installing from standalone builds, keep `dist\juicer-svc.exe` alongside
+> `dist\juicer.exe`; the service installer registers that dedicated service host
+> with Windows.
 
 ---
 
