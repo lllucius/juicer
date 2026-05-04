@@ -108,9 +108,18 @@ if _PYWIN32_AVAILABLE:
             self.stop_event = win32event.CreateEvent(None, True, False, None)
 
         def SvcDoRun(self) -> None:
-            """Main service entry: boot → wait → shutdown."""
+            """Main service entry: boot → wait → shutdown.
+
+            ``waitHint`` is set to 60 000 ms (60 s) because even with no
+            configured delays each ``!SWITCH`` command carries ~2 s of
+            ``_recv_until_timeout`` overhead, so a 4-bank boot sequence
+            takes ~8–13 s before ``SERVICE_RUNNING`` can be reported.
+            The previous ``waitHint=5000`` (5 s) was too small and caused
+            the SCM to declare a timeout even when no delays were
+            configured.
+            """
             try:
-                self.ReportServiceStatus(win32service.SERVICE_START_PENDING, waitHint=5000)
+                self.ReportServiceStatus(win32service.SERVICE_START_PENDING, waitHint=60000)
                 servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Running boot sequence")
 
                 try:
