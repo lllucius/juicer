@@ -256,8 +256,7 @@ if _PYSIDE6_AVAILABLE:
             except ImportError:
                 self.combo_port.addItem("COM3", "COM3")
             if current_port:
-                restored = self.set_current_port(current_port, add_if_missing=False)
-                if not restored:
+                if not self.set_current_port(current_port, add_if_missing=False):
                     logger.info("Previously selected port is no longer available: %s", current_port)
 
         def _on_connect(self) -> None:
@@ -272,6 +271,7 @@ if _PYSIDE6_AVAILABLE:
 
         def current_port(self) -> str:
             text_port = str(self.combo_port.currentText()).split(" —")[0].strip()
+            # Editable combo boxes can have typed text even when no list items exist.
             if self.combo_port.count() == 0:
                 return text_port
             idx = self.combo_port.currentIndex()
@@ -299,6 +299,7 @@ if _PYSIDE6_AVAILABLE:
                     return True
             if add_if_missing:
                 self.combo_port.setEditText(port)
+                return True
             return False
 
         def set_connected(self, connected: bool) -> None:
@@ -873,7 +874,8 @@ if _PYSIDE6_AVAILABLE:
         def _apply_config(self, config: GlobalConfig) -> None:
             """Push config values into editor widgets."""
             self._config = config
-            self.serial_settings.set_current_port(config.port)
+            if config.port:
+                self.serial_settings.set_current_port(config.port)
             self.sound_settings.set_sounds(config.start_sound, config.stop_sound)
             self.boot_editor.set_sequence_config(config.boot)
             self.shutdown_editor.set_sequence_config(config.shutdown)
