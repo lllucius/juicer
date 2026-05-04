@@ -271,10 +271,13 @@ if _PYSIDE6_AVAILABLE:
             self.disconnect_requested.emit()
 
         def current_port(self) -> str:
+            text_port = str(self.combo_port.currentText()).split(" —")[0].strip()
             if self.combo_port.count() == 0:
-                return str(self.combo_port.currentText()).strip()
+                return text_port
             idx = self.combo_port.currentIndex()
-            port = self.combo_port.itemData(idx) or self.combo_port.currentText().split(" —")[0]
+            if idx < 0:
+                return text_port
+            port = self.combo_port.itemData(idx) or text_port
             return str(port).strip()
 
         def available_ports(self) -> set[str]:
