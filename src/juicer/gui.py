@@ -256,18 +256,26 @@ if _PYSIDE6_AVAILABLE:
             except ImportError:
                 self.combo_port.addItem("COM3", "COM3")
             if current_port:
-                self.set_current_port(current_port, add_if_missing=False)
+                restored = self.set_current_port(current_port, add_if_missing=False)
+                if not restored:
+                    logger.info("Previously selected port is no longer available: %s", current_port)
 
         def _on_connect(self) -> None:
-            self.connect_requested.emit(self.current_port())
+            port = self.current_port()
+            if port:
+                self.connect_requested.emit(port)
+            else:
+                logger.warning("Connect requested without a selected serial port")
 
         def _on_disconnect(self) -> None:
             self.disconnect_requested.emit()
 
         def current_port(self) -> str:
+            if self.combo_port.count() == 0:
+                return str(self.combo_port.currentText()).strip()
             idx = self.combo_port.currentIndex()
             port = self.combo_port.itemData(idx) or self.combo_port.currentText().split(" —")[0]
-            return str(port)
+            return str(port).strip()
 
         def available_ports(self) -> set[str]:
             ports: set[str] = set()
@@ -280,6 +288,7 @@ if _PYSIDE6_AVAILABLE:
         def set_current_port(self, port: str, *, add_if_missing: bool = True) -> bool:
             port = port.strip()
             if not port:
+                logger.debug("Ignoring empty serial port selection")
                 return False
             for i in range(self.combo_port.count()):
                 if self.combo_port.itemData(i) == port:
@@ -892,9 +901,15 @@ if _PYSIDE6_AVAILABLE:
             """Connect to the saved port on startup when it is present."""
             port = self._config.port.strip()
             if not port:
+                logger.info("No saved serial port configured; skipping startup connection")
                 return
-            if self.serial_settings.set_current_port(port, add_if_missing=False):
-                self._connect_serial(port)
+            if not self.serial_settings.set_current_port(port, add_if_missing=False):
+                logger.info(
+                    "Saved serial port is not available; skipping startup connection: %s",
+                    port,
+                )
+                return
+            self._connect_serial(port)
 
         @Slot(str)
         def _connect_serial(self, port: str) -> None:
