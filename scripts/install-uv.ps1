@@ -9,6 +9,31 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Get-PythonPath {
+    foreach ($Name in @("py", "python", "python3")) {
+        $Command = Get-Command $Name -ErrorAction SilentlyContinue
+        if ($Command) {
+            return $Command.Source
+        }
+    }
+
+    return $null
+}
+
+function Get-PythonUserScriptsPath {
+    $Python = Get-PythonPath
+    if (-not $Python) {
+        return $null
+    }
+
+    $UserBase = & $Python -m site --user-base 2>$null | Select-Object -First 1
+    if (-not $UserBase) {
+        return $null
+    }
+
+    return Join-Path $UserBase "Scripts"
+}
+
 function Get-UvPath {
     $Command = Get-Command uv -ErrorAction SilentlyContinue
     if ($Command) {
@@ -21,6 +46,10 @@ function Get-UvPath {
     }
     if ($env:USERPROFILE) {
         $Candidates += Join-Path $env:USERPROFILE ".local\bin\uv.exe"
+    }
+    $PythonUserScripts = Get-PythonUserScriptsPath
+    if ($PythonUserScripts) {
+        $Candidates += Join-Path $PythonUserScripts "uv.exe"
     }
 
     foreach ($Candidate in $Candidates) {
@@ -45,18 +74,16 @@ function Format-PathForComparison {
 
 $Uv = Get-UvPath
 if (-not $Uv) {
-    Write-Host "uv is not installed; downloading and running the official uv installer..."
-    $Installer = Join-Path ([System.IO.Path]::GetTempPath()) "uv-install-$([Guid]::NewGuid()).ps1"
-    Invoke-RestMethod https://astral.sh/uv/install.ps1 -OutFile $Installer
-    try {
-        & $Installer
-    }
-    finally {
-        Remove-Item $Installer -ErrorAction SilentlyContinue
+    $BootstrapPython = Get-PythonPath
+    if (-not $BootstrapPython) {
+        Write-Error "uv is not installed and Python was not found. Install Python or uv, then run this script again."
     }
 
-    if ($HOME) {
-        $UvBin = Join-Path $HOME ".local\bin"
+    Write-Host "uv is not installed; installing uv with Python pip..."
+    & $BootstrapPython -m pip install --user uv
+
+    $UvBin = Get-PythonUserScriptsPath
+    if ($UvBin) {
         $PathEntries = $env:PATH -split ";" | Where-Object { $_ } | ForEach-Object {
             Format-PathForComparison $_
         }
@@ -67,7 +94,7 @@ if (-not $Uv) {
 
     $Uv = Get-UvPath
     if (-not $Uv) {
-        Write-Error "uv installation completed, but uv.exe was not found in PATH or .local\bin. Add the uv install directory to PATH or install uv manually, then run this script again."
+        Write-Error "uv installation script ran, but uv.exe was not found in PATH or the Python user Scripts directory. Add the uv install directory to PATH or install uv manually, then run this script again."
     }
 }
 
