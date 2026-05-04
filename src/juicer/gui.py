@@ -1,8 +1,7 @@
 """Juicer PySide6 GUI — complete graphical interface for the UPS controller.
 
 Panels:
-  - Overview: connection status, bank states
-  - Serial Settings: port selection, connect/disconnect
+  - Overview: serial settings, connection status, bank states
   - Manual Controls: all-on, all-off, per-bank switches
   - Boot Sequence Editor: per-bank action/delay config
   - Shutdown Sequence Editor: same for shutdown
@@ -47,6 +46,7 @@ try:
         QGroupBox,
         QHBoxLayout,
         QLabel,
+        QLineEdit,
         QMainWindow,
         QMessageBox,
         QPushButton,
@@ -240,11 +240,11 @@ if _PYSIDE6_AVAILABLE:
             btn_row.addWidget(self.btn_disconnect)
 
             layout.addLayout(btn_row)
-            layout.addStretch()
 
             self._refresh_ports()
 
         def _refresh_ports(self) -> None:
+            current_port = self.current_port()
             self.combo_port.clear()
             try:
                 from serial.tools.list_ports import comports
@@ -255,20 +255,91 @@ if _PYSIDE6_AVAILABLE:
                     )
             except ImportError:
                 self.combo_port.addItem("COM3", "COM3")
+            if current_port:
+                self.set_current_port(current_port, add_if_missing=False)
 
         def _on_connect(self) -> None:
-            idx = self.combo_port.currentIndex()
-            port = self.combo_port.itemData(idx) or self.combo_port.currentText().split(" —")[0]
-            self.connect_requested.emit(port)
+            self.connect_requested.emit(self.current_port())
 
         def _on_disconnect(self) -> None:
             self.disconnect_requested.emit()
+
+        def current_port(self) -> str:
+            idx = self.combo_port.currentIndex()
+            return str(self.combo_port.itemData(idx) or self.combo_port.currentText().split(" —")[0])
+
+        def available_ports(self) -> set[str]:
+            ports: set[str] = set()
+            for i in range(self.combo_port.count()):
+                data = self.combo_port.itemData(i)
+                if data:
+                    ports.add(str(data))
+            return ports
+
+        def set_current_port(self, port: str, *, add_if_missing: bool = True) -> bool:
+            port = port.strip()
+            if not port:
+                return False
+            for i in range(self.combo_port.count()):
+                if self.combo_port.itemData(i) == port:
+                    self.combo_port.setCurrentIndex(i)
+                    return True
+            if add_if_missing:
+                self.combo_port.setEditText(port)
+            return False
 
         def set_connected(self, connected: bool) -> None:
             self.btn_connect.setEnabled(not connected)
             self.btn_disconnect.setEnabled(connected)
             self.combo_port.setEnabled(not connected)
             self.btn_refresh.setEnabled(not connected)
+
+    class SoundSettingsPanel(QWidget):
+        """Startup and shutdown sound path settings."""
+
+        def __init__(self, parent: Optional[QWidget] = None) -> None:
+            super().__init__(parent)
+            layout = QVBoxLayout(self)
+
+            group = QGroupBox("Sound Configuration")
+            group.setAccessibleName("Sound Configuration")
+            form = QFormLayout(group)
+
+            self.edit_start_sound = QLineEdit()
+            self.edit_start_sound.setAccessibleName("Startup Sound Path")
+            form.addRow("Startup Sound:", self._path_row(self.edit_start_sound, "Browse Startup Sound"))
+
+            self.edit_stop_sound = QLineEdit()
+            self.edit_stop_sound.setAccessibleName("Shutdown Sound Path")
+            form.addRow("Shutdown Sound:", self._path_row(self.edit_stop_sound, "Browse Shutdown Sound"))
+
+            layout.addWidget(group)
+
+        def _path_row(self, edit: QLineEdit, accessible_name: str) -> QWidget:
+            row = QWidget()
+            layout = QHBoxLayout(row)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.addWidget(edit)
+
+            btn_browse = QPushButton("Browse…")
+            btn_browse.setAccessibleName(accessible_name)
+            btn_browse.clicked.connect(lambda: self._browse_sound(edit))
+            layout.addWidget(btn_browse)
+            return row
+
+        def _browse_sound(self, edit: QLineEdit) -> None:
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Select Sound File", "", "WAV Files (*.wav);;All Files (*)"
+            )
+            if path:
+                edit.setText(path)
+
+        def set_sounds(self, start_sound: str, stop_sound: str) -> None:
+            self.edit_start_sound.setText(start_sound)
+            self.edit_stop_sound.setText(stop_sound)
+
+        def get_sounds(self) -> tuple[str, str]:
+            return self.edit_start_sound.text().strip(), self.edit_stop_sound.text().strip()
 
     class ManualControlsPanel(QWidget):
         """All-on, all-off, and per-bank switches."""
@@ -687,6 +758,7 @@ if _PYSIDE6_AVAILABLE:
             # Create panels
             self.overview = OverviewPanel()
             self.serial_settings = SerialSettingsPanel()
+            self.sound_settings = SoundSettingsPanel()
             self.manual_controls = ManualControlsPanel()
             self.boot_editor = BootSequenceEditor()
             self.shutdown_editor = ShutdownSequenceEditor()
@@ -695,8 +767,14 @@ if _PYSIDE6_AVAILABLE:
             self.log_viewer = LogViewer()
 
             # Add tabs
-            self.tabs.addTab(self.overview, "Overview")
-            self.tabs.addTab(self.serial_settings, "Serial Port")
+            self.overview_tab = QWidget()
+            overview_layout = QVBoxLayout(self.overview_tab)
+            overview_layout.addWidget(self.serial_settings)
+            overview_layout.addWidget(self.sound_settings)
+            overview_layout.addWidget(self.overview)
+            overview_layout.addStretch()
+
+            self.tabs.addTab(self.overview_tab, "Overview")
             self.tabs.addTab(self.manual_controls, "Manual Control")
             self.tabs.addTab(self.boot_editor, "Boot Sequence")
             self.tabs.addTab(self.shutdown_editor, "Shutdown Sequence")
@@ -729,6 +807,7 @@ if _PYSIDE6_AVAILABLE:
 
             # Load default config
             self._load_config()
+            self._connect_to_saved_port_if_available()
 
         @Slot()
         def _on_save_settings(self) -> None:
@@ -775,12 +854,16 @@ if _PYSIDE6_AVAILABLE:
         def _apply_config(self, config: GlobalConfig) -> None:
             """Push config values into editor widgets."""
             self._config = config
+            self.serial_settings.set_current_port(config.port)
+            self.sound_settings.set_sounds(config.start_sound, config.stop_sound)
             self.boot_editor.set_sequence_config(config.boot)
             self.shutdown_editor.set_sequence_config(config.shutdown)
             self.import_export.set_config(config)
 
         def _save_config(self) -> None:
             """Read editor widgets and save config."""
+            self._config.port = self.serial_settings.current_port()
+            self._config.start_sound, self._config.stop_sound = self.sound_settings.get_sounds()
             self._config.boot = self.boot_editor.get_sequence_config()
             self._config.shutdown = self.shutdown_editor.get_sequence_config()
             try:
@@ -797,6 +880,14 @@ if _PYSIDE6_AVAILABLE:
                 logger.info("Configuration saved")
             except Exception as exc:
                 logger.error("Failed to save config: %s", exc)
+
+        def _connect_to_saved_port_if_available(self) -> None:
+            """Connect to the saved port on startup when it is present."""
+            port = self._config.port.strip()
+            if not port:
+                return
+            if self.serial_settings.set_current_port(port, add_if_missing=False):
+                self._connect_serial(port)
 
         @Slot(str)
         def _connect_serial(self, port: str) -> None:
