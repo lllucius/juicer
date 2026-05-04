@@ -10,7 +10,9 @@ Importable on any OS; runtime methods raise ``OSError`` on non-Windows.
 from __future__ import annotations
 
 import logging
+import os
 import platform
+import site
 import sys
 
 logger = logging.getLogger(__name__)
@@ -106,6 +108,7 @@ if _PYWIN32_AVAILABLE:
         def __init__(self, args: list[str]) -> None:
             win32serviceutil.ServiceFramework.__init__(self, args)
             self.stop_event = win32event.CreateEvent(None, True, False, None)
+            self._shutdown_done = False
 
         def SvcDoRun(self) -> None:
             """Main service entry: boot → wait → shutdown.
@@ -134,13 +137,14 @@ if _PYWIN32_AVAILABLE:
                 # Block until stop event is signalled
                 win32event.WaitForSingleObject(self.stop_event, win32event.INFINITE)
 
-                # Run shutdown sequence after stop event
-                servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Running shutdown sequence")
-                try:
-                    _run_shutdown_sequence()
-                except Exception as exc:
-                    servicemanager.LogErrorMsg(f"{SERVICE_NAME}: Shutdown failed: {exc}")
-                    logger.error("Shutdown sequence failed: %s", exc)
+                # Run shutdown sequence after stop event unless SvcShutdown already did it.
+                if not self._shutdown_done:
+                    servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Running shutdown sequence")
+                    try:
+                        _run_shutdown_sequence()
+                    except Exception as exc:
+                        servicemanager.LogErrorMsg(f"{SERVICE_NAME}: Shutdown failed: {exc}")
+                        logger.error("Shutdown sequence failed: %s", exc)
 
             finally:
                 self.ReportServiceStatus(win32service.SERVICE_STOPPED)
@@ -148,7 +152,7 @@ if _PYWIN32_AVAILABLE:
 
         def SvcStop(self) -> None:
             """Handle SERVICE_CONTROL_STOP."""
-            self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING, waitHint=5000)
+            self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING, waitHint=60000)
             servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Stop requested")
             win32event.SetEvent(self.stop_event)
 
@@ -158,13 +162,15 @@ if _PYWIN32_AVAILABLE:
             On system shutdown there is limited time, so we run powerdown()
             directly in the handler (matching C++ behaviour).
             """
-            self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING, waitHint=5000)
+            self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING, waitHint=60000)
             servicemanager.LogInfoMsg(f"{SERVICE_NAME}: System shutdown — running shutdown now")
+            self._shutdown_done = True
             try:
                 _run_shutdown_sequence()
             except Exception as exc:
                 servicemanager.LogErrorMsg(f"{SERVICE_NAME}: Shutdown failed: {exc}")
-            win32event.SetEvent(self.stop_event)
+            finally:
+                win32event.SetEvent(self.stop_event)
 
 else:
 
@@ -189,8 +195,6 @@ def _find_service_exe() -> str | None:
     When the CLI (juicer.exe) installs the service, the Windows Service Control Manager
     must be pointed at the dedicated service host binary (juicer-svc.exe), not the CLI.
     """
-    import os
-
     current_dir = os.path.dirname(os.path.abspath(sys.executable))
     svc_exe = os.path.join(current_dir, "juicer-svc.exe")
     return svc_exe if os.path.isfile(svc_exe) else None
@@ -205,10 +209,7 @@ def _find_pythonservice_exe() -> str | None:
     "Access is denied."  Passing the already-installed path directly as ``exeName``
     to :func:`win32serviceutil.InstallService` skips the relocation step entirely.
     """
-    import os
-    import site
-
-    search_dirs: list[str] = []
+    search_dirs: list[str] = [os.path.join(sys.prefix, "Lib", "site-packages")]
     if hasattr(site, "getsitepackages"):
         search_dirs.extend(site.getsitepackages())
     user_site = site.getusersitepackages()
@@ -304,18 +305,18 @@ def run_debug() -> None:
     win32serviceutil.HandleCommandLine(JuicerService)
 
 
-if __name__ == "__main__":
-    # Entry point for juicer-svc.exe.
-    # Delegates to pywin32's HandleCommandLine which registers this executable
-    # with the Service Control Manager and handles start/stop/install commands.
+def main() -> None:
+    """Entry point for juicer-svc.exe / ``python -m juicer.service``."""
     if _PYWIN32_AVAILABLE:
         win32serviceutil.HandleCommandLine(JuicerService)
     else:
-        import sys as _sys
-
         print(
             "pywin32 is required for service operations. "
             "Install with: pip install pywin32",
-            file=_sys.stderr,
+            file=sys.stderr,
         )
-        _sys.exit(1)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

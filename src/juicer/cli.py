@@ -6,11 +6,14 @@ Entry point: ``juicer`` (or ``python -m juicer``).
 from __future__ import annotations
 
 import logging
+import platform as plat
 import sys
+from pathlib import Path
 
 import click
 
 from juicer import __version__
+from juicer.config import ConfigStore, JsonStore, WindowsRegistryStore
 
 logger = logging.getLogger("juicer")
 
@@ -58,8 +61,7 @@ def ports() -> None:
         for port in found:
             click.echo(f"{port.device}\t{port.description}")
     except ImportError:
-        click.echo("pyserial is required: pip install pyserial", err=True)
-        raise SystemExit(1)
+        raise click.ClickException("pyserial is required: pip install pyserial") from None
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -87,19 +89,18 @@ def status(port: str) -> None:
         try:
             pwr = client.query_power_status()
             click.echo(f"Power: {pwr.status.value}")
-        except Exception:
-            pass
+        except Exception as exc:
+            click.echo(f"Power: (unavailable — {exc})", err=True)
 
         # Battery
         try:
             bat = client.query_battery_status()
             click.echo(f"Battery: {bat.level}%")
-        except Exception:
-            pass
+        except Exception as exc:
+            click.echo(f"Battery: (unavailable — {exc})", err=True)
 
     except Exception as exc:
-        click.echo(f"Error: {exc}", err=True)
-        raise SystemExit(1)
+        raise click.ClickException(str(exc)) from exc
     finally:
         transport.close()
 
@@ -124,8 +125,7 @@ def all_on(port: str) -> None:
             click.echo(str(r))
         click.echo("All banks ON.")
     except Exception as exc:
-        click.echo(f"Error: {exc}", err=True)
-        raise SystemExit(1)
+        raise click.ClickException(str(exc)) from exc
     finally:
         transport.close()
 
@@ -145,8 +145,7 @@ def all_off(port: str) -> None:
             click.echo(str(r))
         click.echo("All banks OFF.")
     except Exception as exc:
-        click.echo(f"Error: {exc}", err=True)
-        raise SystemExit(1)
+        raise click.ClickException(str(exc)) from exc
     finally:
         transport.close()
 
@@ -172,8 +171,7 @@ def switch(port: str, bank: int, state: str) -> None:
         for r in responses:
             click.echo(str(r))
     except Exception as exc:
-        click.echo(f"Error: {exc}", err=True)
-        raise SystemExit(1)
+        raise click.ClickException(str(exc)) from exc
     finally:
         transport.close()
 
@@ -183,17 +181,10 @@ def switch(port: str, bank: int, state: str) -> None:
 # ──────────────────────────────────────────────────────────────────────
 
 
-def _get_config_store() -> "ConfigStore":  # type: ignore[name-defined]  # noqa: F821
+def _get_config_store() -> ConfigStore:
     """Get the appropriate config store for the current platform."""
-    import platform as plat
-
-    from juicer.config import JsonStore, WindowsRegistryStore
-
     if plat.system() == "Windows":
         return WindowsRegistryStore()
-    # Fallback to JSON in home dir
-    from pathlib import Path
-
     json_path = Path.home() / ".juicer" / "config.json"
     return JsonStore(json_path)
 
@@ -217,8 +208,7 @@ def boot() -> None:
         finally:
             transport.close()
     except Exception as exc:
-        click.echo(f"Error: {exc}", err=True)
-        raise SystemExit(1)
+        raise click.ClickException(str(exc)) from exc
 
 
 @main.command()
@@ -240,8 +230,7 @@ def shutdown() -> None:
         finally:
             transport.close()
     except Exception as exc:
-        click.echo(f"Error: {exc}", err=True)
-        raise SystemExit(1)
+        raise click.ClickException(str(exc)) from exc
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -261,12 +250,10 @@ def config_show() -> None:
         store = _get_config_store()
         cfg = store.load()
         click.echo(cfg.model_dump_json(indent=2))
-    except FileNotFoundError:
-        click.echo("No configuration found.", err=True)
-        raise SystemExit(1)
+    except FileNotFoundError as exc:
+        raise click.ClickException("No configuration found.") from exc
     except Exception as exc:
-        click.echo(f"Error: {exc}", err=True)
-        raise SystemExit(1)
+        raise click.ClickException(str(exc)) from exc
 
 
 @config.command("export")
@@ -282,8 +269,7 @@ def config_export(file: str) -> None:
         export_store.save(cfg)
         click.echo(f"Configuration exported to {file}")
     except Exception as exc:
-        click.echo(f"Error: {exc}", err=True)
-        raise SystemExit(1)
+        raise click.ClickException(str(exc)) from exc
 
 
 @config.command("import")
@@ -299,8 +285,7 @@ def config_import(file: str) -> None:
         target_store.save(cfg)
         click.echo(f"Configuration imported from {file}")
     except Exception as exc:
-        click.echo(f"Error: {exc}", err=True)
-        raise SystemExit(1)
+        raise click.ClickException(str(exc)) from exc
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -322,8 +307,7 @@ def service_install() -> None:
         install_service()
         click.echo("Service installed.")
     except Exception as exc:
-        click.echo(f"Error: {exc}", err=True)
-        raise SystemExit(1)
+        raise click.ClickException(str(exc)) from exc
 
 
 @service.command("uninstall")
@@ -335,8 +319,7 @@ def service_uninstall() -> None:
         uninstall_service()
         click.echo("Service uninstalled.")
     except Exception as exc:
-        click.echo(f"Error: {exc}", err=True)
-        raise SystemExit(1)
+        raise click.ClickException(str(exc)) from exc
 
 
 @service.command("start")
@@ -348,8 +331,7 @@ def service_start() -> None:
         start_service()
         click.echo("Service started.")
     except Exception as exc:
-        click.echo(f"Error: {exc}", err=True)
-        raise SystemExit(1)
+        raise click.ClickException(str(exc)) from exc
 
 
 @service.command("stop")
@@ -361,8 +343,7 @@ def service_stop() -> None:
         stop_service()
         click.echo("Service stopped.")
     except Exception as exc:
-        click.echo(f"Error: {exc}", err=True)
-        raise SystemExit(1)
+        raise click.ClickException(str(exc)) from exc
 
 
 @service.command("status")
@@ -374,8 +355,7 @@ def service_status_cmd() -> None:
         st = service_status()
         click.echo(f"Service status: {st}")
     except Exception as exc:
-        click.echo(f"Error: {exc}", err=True)
-        raise SystemExit(1)
+        raise click.ClickException(str(exc)) from exc
 
 
 if __name__ == "__main__":

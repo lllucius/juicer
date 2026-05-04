@@ -36,6 +36,12 @@ class SwitchClient(Protocol):
     def switch(self, bank: int, state: str) -> object: ...
 
 
+class CancelToken(Protocol):
+    """Minimal cancellation interface accepted by the sequencer."""
+
+    def is_set(self) -> bool: ...
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Sound helper
 # ──────────────────────────────────────────────────────────────────────
@@ -70,6 +76,7 @@ def run_sequence(
     start_sound: str = "",
     stop_sound: str = "",
     sleeper: Sleeper = time.sleep,
+    cancel: CancelToken | None = None,
 ) -> None:
     """Execute a boot or shutdown sequence.
 
@@ -80,6 +87,7 @@ def run_sequence(
         start_sound: WAV file path to play before the first bank action.
         stop_sound: WAV file path to play after the last bank action.
         sleeper: Callable for delays (injected for testing).
+        cancel: Optional event-like object; if set, the sequence exits before the next step.
     """
     logger.info("Starting sequence, bank order: %s", bank_order)
 
@@ -87,6 +95,10 @@ def run_sequence(
     _play_sound(start_sound)
 
     for bank_num in bank_order:
+        if cancel is not None and cancel.is_set():
+            logger.info("Sequence cancelled before bank %d", bank_num)
+            return
+
         bank_cfg = seq.bank(bank_num)
 
         if bank_cfg.action is None:
@@ -100,6 +112,9 @@ def run_sequence(
             delay_sec = bank_cfg.pre_delay_ms / 1000.0
             logger.info("Bank %d: pre-delay %d ms", bank_num, bank_cfg.pre_delay_ms)
             sleeper(delay_sec)
+            if cancel is not None and cancel.is_set():
+                logger.info("Sequence cancelled after pre-delay for bank %d", bank_num)
+                return
 
         # Execute action
         logger.info("Bank %d: !SWITCH %d %s", bank_num, bank_num, state_str)
@@ -107,8 +122,6 @@ def run_sequence(
             client.switch(bank_num, state_str)
         except Exception as exc:
             logger.error("Bank %d: action failed: %s", bank_num, exc)
-            # Clean up: play stop sound even on error, then re-raise
-            _play_sound(stop_sound)
             raise
 
         # Post-delay
@@ -116,6 +129,9 @@ def run_sequence(
             delay_sec = bank_cfg.post_delay_ms / 1000.0
             logger.info("Bank %d: post-delay %d ms", bank_num, bank_cfg.post_delay_ms)
             sleeper(delay_sec)
+            if cancel is not None and cancel.is_set():
+                logger.info("Sequence cancelled after post-delay for bank %d", bank_num)
+                return
 
     # Play stop sound
     _play_sound(stop_sound)
@@ -128,6 +144,7 @@ def run_boot(
     client: SwitchClient,
     *,
     sleeper: Sleeper = time.sleep,
+    cancel: CancelToken | None = None,
 ) -> None:
     """Run the boot sequence (banks 1→4) using ``config.boot``."""
     run_sequence(
@@ -137,6 +154,7 @@ def run_boot(
         start_sound=config.start_sound,
         stop_sound=config.stop_sound,
         sleeper=sleeper,
+        cancel=cancel,
     )
 
 
@@ -145,6 +163,7 @@ def run_shutdown(
     client: SwitchClient,
     *,
     sleeper: Sleeper = time.sleep,
+    cancel: CancelToken | None = None,
 ) -> None:
     """Run the shutdown sequence (banks 4→1) using ``config.shutdown``."""
     run_sequence(
@@ -154,4 +173,5 @@ def run_shutdown(
         start_sound=config.start_sound,
         stop_sound=config.stop_sound,
         sleeper=sleeper,
+        cancel=cancel,
     )
