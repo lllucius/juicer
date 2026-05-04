@@ -105,6 +105,16 @@ class _StubSerial:
         return chunk
 
 
+class _CountingFakeTransport(FakeTransport):
+    def __init__(self) -> None:
+        super().__init__()
+        self.read_count = 0
+
+    def read_line(self, timeout: float = 2.0) -> str:
+        self.read_count += 1
+        return super().read_line(timeout)
+
+
 def test_read_line_preserves_first_byte_after_cr_without_lf() -> None:
     transport = SerialTransport(port="COM1")
     transport._serial = _StubSerial(b"$BANK 1 = OFF\r$BANK 2 = OFF\r")
@@ -699,6 +709,35 @@ def test_client_switch_on() -> None:
     assert result[0].state == BankState.ON
 
 
+def test_client_switch_reads_only_expected_bank_response() -> None:
+    t = _CountingFakeTransport()
+    t.open()
+    t.enqueue_responses(["$BANK 2 = ON", "$BANK 3 = ON"])
+    client = JuicerClient(t)
+
+    result = client.switch(2, "ON")
+
+    assert t.read_count == 1
+    assert isinstance(result[0], BankStatusResponse)
+    assert t.read_line() == "$BANK 3 = ON"
+
+
+def test_client_switch_rejects_wrong_bank_response() -> None:
+    t = _open_fake("$BANK 3 = ON")
+    client = JuicerClient(t)
+
+    with pytest.raises(ProtocolError, match="expected bank 2"):
+        client.switch(2, "ON")
+
+
+def test_client_switch_invalid_parameter_raises_protocol_error() -> None:
+    t = _open_fake("$INVALID_PARAMETER")
+    client = JuicerClient(t)
+
+    with pytest.raises(ProtocolError, match=r"\$INVALID_PARAMETER"):
+        client.switch(2, "ON")
+
+
 def test_client_switch_off() -> None:
     t = _open_fake("$BANK 3 = OFF")
     client = JuicerClient(t)
@@ -1174,4 +1213,3 @@ def test_stateful_battery_queries() -> None:
     assert state.state == BatteryChargeState.FULL
     assert btime.minutes == 60
     assert t.written == ["?BATTERYSTAT\r", "?BATTSTATE\r", "?TIME\r"]
-
