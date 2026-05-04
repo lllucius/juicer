@@ -67,7 +67,7 @@ if (-not $Uv) {
 
     $Uv = Get-UvPath
     if (-not $Uv) {
-        Write-Error "uv was installed, but uv.exe was not found in PATH or .local\bin. Add the uv install directory to PATH or install uv manually, then run this script again."
+        Write-Error "uv installation completed, but uv.exe was not found in PATH or .local\bin. Add the uv install directory to PATH or install uv manually, then run this script again."
     }
 }
 

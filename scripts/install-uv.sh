@@ -35,7 +35,7 @@ main() {
                 ;;
             --venv)
                 if [[ $# -lt 2 ]]; then
-                    echo "error: --venv requires a directory" >&2
+                    echo "error: --venv requires a path argument" >&2
                     return 2
                 fi
                 venv_dir=$2
