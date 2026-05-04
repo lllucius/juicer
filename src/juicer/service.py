@@ -14,6 +14,7 @@ import os
 import platform
 import site
 import sys
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,10 @@ def _ensure_pywin32() -> None:
         )
 
 
-def _run_boot_sequence() -> None:
+ProgressCallback = Callable[[], None]
+
+
+def _run_boot_sequence(progress_callback: ProgressCallback | None = None) -> None:
     """Load config from registry and run boot sequence."""
     from juicer.config import WindowsRegistryStore
     from juicer.protocol import JuicerClient, SerialTransport
@@ -61,10 +65,14 @@ def _run_boot_sequence() -> None:
     config = store.load()
 
     transport = SerialTransport(port=config.port)
+    if progress_callback is not None:
+        progress_callback()
     transport.open()
+    if progress_callback is not None:
+        progress_callback()
     try:
         client = JuicerClient(transport)
-        run_boot(config, client)
+        run_boot(config, client, progress_callback=progress_callback)
     finally:
         transport.close()
 
@@ -109,28 +117,35 @@ if _PYWIN32_AVAILABLE:
             win32serviceutil.ServiceFramework.__init__(self, args)
             self.stop_event = win32event.CreateEvent(None, True, False, None)
             self._shutdown_done = False
+            self._reporting_start_pending = False
+
+        def _report_start_pending(self) -> None:
+            """Report synchronous startup progress to the SCM."""
+            if self._reporting_start_pending:
+                self.ReportServiceStatus(
+                    win32service.SERVICE_START_PENDING,
+                    waitHint=60000,
+                )
 
         def SvcDoRun(self) -> None:
             """Main service entry: boot → wait → shutdown.
 
-            ``waitHint`` is set to 60 000 ms (60 s) because even with no
-            configured delays each ``!SWITCH`` command carries ~2 s of
-            ``_recv_until_timeout`` overhead, so a 4-bank boot sequence
-            takes ~8–13 s before ``SERVICE_RUNNING`` can be reported.
-            The previous ``waitHint=5000`` (5 s) was too small and caused
-            the SCM to declare a timeout even when no delays were
-            configured.
+            Startup intentionally remains synchronous: ``SERVICE_RUNNING`` is
+            reported only after outlet boot has completed, while periodic
+            ``SERVICE_START_PENDING`` updates keep the SCM informed.
             """
             try:
-                self.ReportServiceStatus(win32service.SERVICE_START_PENDING, waitHint=60000)
+                self._reporting_start_pending = True
+                self._report_start_pending()
                 servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Running boot sequence")
 
                 try:
-                    _run_boot_sequence()
+                    _run_boot_sequence(progress_callback=self._report_start_pending)
                 except Exception as exc:
                     servicemanager.LogErrorMsg(f"{SERVICE_NAME}: Boot failed: {exc}")
                     logger.error("Boot sequence failed: %s", exc)
 
+                self._reporting_start_pending = False
                 self.ReportServiceStatus(win32service.SERVICE_RUNNING)
                 servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Service running")
 

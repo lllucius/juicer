@@ -241,6 +241,12 @@ automatically at system start:
 - **On start** — executes the boot sequence (banks 1 → 4).
 - **On stop / system shutdown** — executes the shutdown sequence (banks 4 → 1).
 
+Startup remains synchronous by design: the service reports `SERVICE_RUNNING`
+only after the configured boot sequence has finished, so dependent services do
+not start before outlet power is ready. During long boot work, Juicer
+periodically refreshes `SERVICE_START_PENDING` with the Windows Service Control
+Manager.
+
 ### Install and start
 
 ```bat

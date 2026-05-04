@@ -29,6 +29,9 @@ SHUTDOWN_ORDER = [4, 3, 2, 1]
 Sleeper = Callable[[float], None]
 """Callable that sleeps for *n* seconds.  Default is ``time.sleep``."""
 
+ProgressCallback = Callable[[], None]
+"""Callable invoked to report sequence startup progress."""
+
 
 class SwitchClient(Protocol):
     """Minimal interface needed by the sequencer — just switch a bank."""
@@ -68,6 +71,33 @@ def _play_sound(path: str) -> None:
 # ──────────────────────────────────────────────────────────────────────
 
 
+def _report_progress(progress_callback: ProgressCallback | None) -> None:
+    if progress_callback is not None:
+        progress_callback()
+
+
+def _sleep_with_progress(
+    total_seconds: float,
+    sleeper: Sleeper,
+    progress_callback: ProgressCallback | None,
+    *,
+    interval: float = 5.0,
+) -> None:
+    """Sleep in chunks, reporting progress between chunks."""
+    if total_seconds <= 0:
+        return
+    if interval <= 0:
+        raise ValueError("interval must be greater than zero")
+
+    remaining = total_seconds
+    while remaining > 0:
+        chunk = min(interval, remaining)
+        sleeper(chunk)
+        remaining -= chunk
+        if remaining > 0:
+            _report_progress(progress_callback)
+
+
 def run_sequence(
     seq: SequenceConfig,
     bank_order: list[int],
@@ -77,6 +107,7 @@ def run_sequence(
     stop_sound: str = "",
     sleeper: Sleeper = time.sleep,
     cancel: CancelToken | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> None:
     """Execute a boot or shutdown sequence.
 
@@ -88,11 +119,15 @@ def run_sequence(
         stop_sound: WAV file path to play after the last bank action.
         sleeper: Callable for delays (injected for testing).
         cancel: Optional event-like object; if set, the sequence exits before the next step.
+        progress_callback: Optional callback invoked during long-running startup work.
     """
     logger.info("Starting sequence, bank order: %s", bank_order)
 
     # Play start sound
-    _play_sound(start_sound)
+    if start_sound:
+        _report_progress(progress_callback)
+        _play_sound(start_sound)
+        _report_progress(progress_callback)
 
     for bank_num in bank_order:
         if cancel is not None and cancel.is_set():
@@ -111,7 +146,8 @@ def run_sequence(
         if bank_cfg.pre_delay_ms > 0:
             delay_sec = bank_cfg.pre_delay_ms / 1000.0
             logger.info("Bank %d: pre-delay %d ms", bank_num, bank_cfg.pre_delay_ms)
-            sleeper(delay_sec)
+            _report_progress(progress_callback)
+            _sleep_with_progress(delay_sec, sleeper, progress_callback)
             if cancel is not None and cancel.is_set():
                 logger.info("Sequence cancelled after pre-delay")
                 return
@@ -119,7 +155,9 @@ def run_sequence(
         # Execute action
         logger.info("Bank %d: !SWITCH %d %s", bank_num, bank_num, state_str)
         try:
+            _report_progress(progress_callback)
             client.switch(bank_num, state_str)
+            _report_progress(progress_callback)
         except Exception as exc:
             logger.error("Bank %d: action failed: %s", bank_num, exc)
             # Do not play stop_sound here; callers own error cleanup.
@@ -129,13 +167,17 @@ def run_sequence(
         if bank_cfg.post_delay_ms > 0:
             delay_sec = bank_cfg.post_delay_ms / 1000.0
             logger.info("Bank %d: post-delay %d ms", bank_num, bank_cfg.post_delay_ms)
-            sleeper(delay_sec)
+            _report_progress(progress_callback)
+            _sleep_with_progress(delay_sec, sleeper, progress_callback)
             if cancel is not None and cancel.is_set():
                 logger.info("Sequence cancelled after post-delay")
                 return
 
     # Play stop sound
-    _play_sound(stop_sound)
+    if stop_sound:
+        _report_progress(progress_callback)
+        _play_sound(stop_sound)
+        _report_progress(progress_callback)
 
     logger.info("Sequence complete")
 
@@ -146,6 +188,7 @@ def run_boot(
     *,
     sleeper: Sleeper = time.sleep,
     cancel: CancelToken | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> None:
     """Run the boot sequence (banks 1→4) using ``config.boot``."""
     run_sequence(
@@ -156,6 +199,7 @@ def run_boot(
         stop_sound=config.stop_sound,
         sleeper=sleeper,
         cancel=cancel,
+        progress_callback=progress_callback,
     )
 
 
@@ -165,6 +209,7 @@ def run_shutdown(
     *,
     sleeper: Sleeper = time.sleep,
     cancel: CancelToken | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> None:
     """Run the shutdown sequence (banks 4→1) using ``config.shutdown``."""
     run_sequence(
@@ -175,4 +220,5 @@ def run_shutdown(
         stop_sound=config.stop_sound,
         sleeper=sleeper,
         cancel=cancel,
+        progress_callback=progress_callback,
     )
