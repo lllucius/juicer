@@ -68,9 +68,9 @@ def _run_boot_sequence(progress_callback: ProgressCallback | None = None) -> Non
     if progress_callback is not None:
         progress_callback()
     transport.open()
-    if progress_callback is not None:
-        progress_callback()
     try:
+        if progress_callback is not None:
+            progress_callback()
         client = JuicerClient(transport)
         run_boot(config, client, progress_callback=progress_callback)
     finally:

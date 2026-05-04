@@ -6,6 +6,8 @@ import types
 from collections.abc import Callable
 from unittest.mock import patch
 
+import pytest
+
 
 def _import_service_with_fake_pywin32() -> types.ModuleType:
     class ServiceFramework:
@@ -88,3 +90,50 @@ def test_svc_do_run_reports_running_only_after_boot_completion() -> None:
     assert win32service.SERVICE_RUNNING in statuses
     assert statuses.index(win32service.SERVICE_RUNNING) > 1
     assert statuses[-1] == win32service.SERVICE_STOPPED
+
+
+def test_run_boot_sequence_closes_transport_when_progress_callback_after_open_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import juicer.config as config_module
+    import juicer.protocol as protocol_module
+    import juicer.service as service_module
+
+    opened: list[object] = []
+    closed: list[object] = []
+
+    class FakeStore:
+        def load(self) -> config_module.GlobalConfig:
+            return config_module.GlobalConfig(port="COM1")
+
+    class FakeTransport:
+        def __init__(self, port: str) -> None:
+            self.port = port
+
+        def open(self) -> None:
+            opened.append(self)
+
+        def close(self) -> None:
+            closed.append(self)
+
+    class FakeClient:
+        def __init__(self, transport: FakeTransport) -> None:
+            self.transport = transport
+
+    progress_calls = 0
+
+    def progress_callback() -> None:
+        nonlocal progress_calls
+        progress_calls += 1
+        if progress_calls == 2:
+            raise RuntimeError("startup status failed")
+
+    monkeypatch.setattr(config_module, "WindowsRegistryStore", FakeStore)
+    monkeypatch.setattr(protocol_module, "SerialTransport", FakeTransport)
+    monkeypatch.setattr(protocol_module, "JuicerClient", FakeClient)
+
+    with pytest.raises(RuntimeError, match="startup status failed"):
+        service_module._run_boot_sequence(progress_callback=progress_callback)
+
+    assert len(opened) == 1
+    assert closed == opened

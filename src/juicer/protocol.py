@@ -1055,7 +1055,11 @@ class JuicerClient:
             if isinstance(resp, BankStatusResponse):
                 banks[resp.bank.value] = resp.state
             else:
-                logger.warning("Unexpected response in OUTLETSTAT: %r", resp)
+                raise ProtocolError(f"Unexpected ?OUTLETSTAT response: {resp!r}")
+        missing = set(range(1, 5)) - banks.keys()
+        if missing:
+            missing_banks = ", ".join(str(bank) for bank in sorted(missing))
+            raise ProtocolError(f"?OUTLETSTAT response missing banks: {missing_banks}")
         return OutletStatusResponse(banks=banks)
 
     def query_power_status(self) -> PowerStatusResponse:
@@ -1081,7 +1085,7 @@ class JuicerClient:
             elif isinstance(resp, CurrentResponse):
                 data["current"] = resp.amps
             else:
-                logger.warning("Unexpected in POWER: %r", resp)
+                raise ProtocolError(f"Unexpected ?POWER response: {resp!r}")
         required = {"volts_in", "volts_out", "watts", "current"}
         missing = required - data.keys()
         if missing:
