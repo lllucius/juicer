@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -19,6 +20,7 @@ from juicer.protocol import (
     BatteryChargeState,
     BatteryLevelResponse,
     BatteryStateResponse,
+    BatteryThresholdGlobalResponse,
     BatteryThresholdResponse,
     Brightness,
     BrightnessResponse,
@@ -27,12 +29,14 @@ from juicer.protocol import (
     BuzzerMode,
     BuzzerResponse,
     CurrentResponse,
-    FakeTransport,
     FactoryResetResponse,
+    FakeTransport,
     FeedbackMode,
     FeedbackResponse,
+    IDLineResponse,
     InvalidParameterResponse,
     JuicerClient,
+    JuicerTimeoutError,
     LinefeedMode,
     LinefeedResponse,
     LoadResponse,
@@ -48,7 +52,6 @@ from juicer.protocol import (
     SerialTransport,
     SleepMode,
     SleepModeResponse,
-    TimeoutError,
     TransportError,
     ValidationError,
     VoltageResponse,
@@ -102,6 +105,16 @@ class _StubSerial:
         return chunk
 
 
+class _CountingFakeTransport(FakeTransport):
+    def __init__(self) -> None:
+        super().__init__()
+        self.read_count = 0
+
+    def read_line(self, timeout: float = 2.0) -> str:
+        self.read_count += 1
+        return super().read_line(timeout)
+
+
 def test_read_line_preserves_first_byte_after_cr_without_lf() -> None:
     transport = SerialTransport(port="COM1")
     transport._serial = _StubSerial(b"$BANK 1 = OFF\r$BANK 2 = OFF\r")
@@ -122,6 +135,28 @@ def test_read_line_discards_optional_lf_after_cr() -> None:
 
     assert first == "$PWR = NORMAL"
     assert second == "$BATTERY = 85"
+
+
+def test_serial_open_sets_write_timeout() -> None:
+    serial_module = Mock()
+    serial_module.EIGHTBITS = 8
+    serial_module.PARITY_NONE = "N"
+    serial_module.STOPBITS_ONE = 1
+    serial_module.SerialException = Exception
+
+    with patch.dict(sys.modules, {"serial": serial_module}):
+        transport = SerialTransport(port="COM1")
+        transport.open()
+
+    serial_module.Serial.assert_called_once_with(
+        port="COM1",
+        baudrate=9600,
+        bytesize=8,
+        parity="N",
+        stopbits=1,
+        timeout=0.1,
+        write_timeout=2.0,
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -408,6 +443,12 @@ def test_parse_bthresh_bank4() -> None:
     assert r.level == 80
 
 
+def test_parse_global_bthresh() -> None:
+    r = parse_line("$BTHRESH = 80")
+    assert isinstance(r, BatteryThresholdGlobalResponse)
+    assert r.level == 80
+
+
 def test_parse_low_battery() -> None:
     r = parse_line("$LOWBAT")
     assert isinstance(r, LowBatteryResponse)
@@ -548,20 +589,20 @@ def test_parse_button_off() -> None:
 
 def test_parse_id_manufacturer_line() -> None:
     r = parse_line("$Furman")
-    assert isinstance(r, RawResponse)
-    assert r.raw == "$Furman"
+    assert isinstance(r, IDLineResponse)
+    assert r.text == "Furman"
 
 
 def test_parse_id_model_line() -> None:
     r = parse_line("$F1500-UPS E")
-    assert isinstance(r, RawResponse)
-    assert r.raw == "$F1500-UPS E"
+    assert isinstance(r, IDLineResponse)
+    assert r.text == "F1500-UPS E"
 
 
 def test_parse_id_firmware_line() -> None:
     r = parse_line("$FW1.00 (Emulator)")
-    assert isinstance(r, RawResponse)
-    assert r.raw == "$FW1.00 (Emulator)"
+    assert isinstance(r, IDLineResponse)
+    assert r.text == "FW1.00 (Emulator)"
 
 
 def test_parse_help_command_line() -> None:
@@ -602,7 +643,7 @@ def test_fake_transport_write_and_read() -> None:
 
 def test_fake_transport_raises_timeout_when_empty() -> None:
     t = _open_fake()
-    with pytest.raises(TimeoutError):
+    with pytest.raises(JuicerTimeoutError):
         t.read_line()
 
 
@@ -619,7 +660,7 @@ def test_fake_transport_clear_resets_state() -> None:
     t.write("!ALL_ON\r")
     t.clear()
     assert t.written == []
-    with pytest.raises(TimeoutError):
+    with pytest.raises(JuicerTimeoutError):
         t.read_line()
 
 
@@ -666,6 +707,35 @@ def test_client_switch_on() -> None:
     assert isinstance(result[0], BankStatusResponse)
     assert result[0].bank == BankNumber.BANK2
     assert result[0].state == BankState.ON
+
+
+def test_client_switch_reads_only_expected_bank_response() -> None:
+    t = _CountingFakeTransport()
+    t.open()
+    t.enqueue_responses(["$BANK 2 = ON", "$BANK 3 = ON"])
+    client = JuicerClient(t)
+
+    result = client.switch(2, "ON")
+
+    assert t.read_count == 1
+    assert isinstance(result[0], BankStatusResponse)
+    assert t.read_line() == "$BANK 3 = ON"
+
+
+def test_client_switch_rejects_wrong_bank_response() -> None:
+    t = _open_fake("$BANK 3 = ON")
+    client = JuicerClient(t)
+
+    with pytest.raises(ProtocolError, match="expected bank 2"):
+        client.switch(2, "ON")
+
+
+def test_client_switch_invalid_parameter_raises_protocol_error() -> None:
+    t = _open_fake("$INVALID_PARAMETER")
+    client = JuicerClient(t)
+
+    with pytest.raises(ProtocolError, match=r"\$INVALID_PARAMETER"):
+        client.switch(2, "ON")
 
 
 def test_client_switch_off() -> None:
@@ -852,6 +922,30 @@ def test_client_query_outlet_status() -> None:
     assert result.banks[4] == BankState.OFF
 
 
+def test_client_query_outlet_status_wrong_response_raises() -> None:
+    t = _open_fake(
+        "$BANK 1 = ON",
+        "$BANK 2 = OFF",
+        "$INVALID_PARAMETER",
+        "$BANK 4 = OFF",
+    )
+    client = JuicerClient(t)
+    with pytest.raises(ProtocolError, match=r"\?OUTLETSTAT"):
+        client.query_outlet_status()
+
+
+def test_client_query_outlet_status_missing_bank_raises() -> None:
+    t = _open_fake(
+        "$BANK 1 = ON",
+        "$BANK 2 = OFF",
+        "$BANK 2 = ON",
+        "$BANK 4 = OFF",
+    )
+    client = JuicerClient(t)
+    with pytest.raises(ProtocolError, match="3"):
+        client.query_outlet_status()
+
+
 def test_client_query_power_status() -> None:
     t = _open_fake("$PWR = NORMAL")
     client = JuicerClient(t)
@@ -881,6 +975,30 @@ def test_client_query_power() -> None:
     assert result.volts_out == pytest.approx(230.0)
     assert result.watts == pytest.approx(150.0)
     assert result.current == pytest.approx(0.65)
+
+
+def test_client_query_power_missing_field_raises() -> None:
+    t = _open_fake(
+        "$VOLTS_IN = 230.0",
+        "$VOLTS_OUT = 230.0",
+        "$WATTS = 150.0",
+        "$WATTS = 200.0",
+    )
+    client = JuicerClient(t)
+    with pytest.raises(ProtocolError, match="current"):
+        client.query_power()
+
+
+def test_client_query_power_wrong_response_raises() -> None:
+    t = _open_fake(
+        "$VOLTS_IN = 230.0",
+        "$VOLTS_OUT = 230.0",
+        "$WATTS = 150.0",
+        "$INVALID_PARAMETER",
+    )
+    client = JuicerClient(t)
+    with pytest.raises(ProtocolError, match=r"\?POWER"):
+        client.query_power()
 
 
 def test_client_query_current() -> None:
@@ -1131,4 +1249,3 @@ def test_stateful_battery_queries() -> None:
     assert state.state == BatteryChargeState.FULL
     assert btime.minutes == 60
     assert t.written == ["?BATTERYSTAT\r", "?BATTSTATE\r", "?TIME\r"]
-

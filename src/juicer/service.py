@@ -10,8 +10,11 @@ Importable on any OS; runtime methods raise ``OSError`` on non-Windows.
 from __future__ import annotations
 
 import logging
+import os
 import platform
+import site
 import sys
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +52,10 @@ def _ensure_pywin32() -> None:
         )
 
 
-def _run_boot_sequence() -> None:
+ProgressCallback = Callable[[], None]
+
+
+def _run_boot_sequence(progress_callback: ProgressCallback | None = None) -> None:
     """Load config from registry and run boot sequence."""
     from juicer.config import WindowsRegistryStore
     from juicer.protocol import JuicerClient, SerialTransport
@@ -59,10 +65,14 @@ def _run_boot_sequence() -> None:
     config = store.load()
 
     transport = SerialTransport(port=config.port)
+    if progress_callback is not None:
+        progress_callback()
     transport.open()
     try:
+        if progress_callback is not None:
+            progress_callback()
         client = JuicerClient(transport)
-        run_boot(config, client)
+        run_boot(config, client, progress_callback=progress_callback)
     finally:
         transport.close()
 
@@ -106,41 +116,50 @@ if _PYWIN32_AVAILABLE:
         def __init__(self, args: list[str]) -> None:
             win32serviceutil.ServiceFramework.__init__(self, args)
             self.stop_event = win32event.CreateEvent(None, True, False, None)
+            self._shutdown_done = False
+            self._reporting_start_pending = False
+
+        def _report_start_pending(self) -> None:
+            """Report synchronous startup progress to the SCM."""
+            if self._reporting_start_pending:
+                self.ReportServiceStatus(
+                    win32service.SERVICE_START_PENDING,
+                    waitHint=60000,
+                )
 
         def SvcDoRun(self) -> None:
             """Main service entry: boot → wait → shutdown.
 
-            ``waitHint`` is set to 60 000 ms (60 s) because even with no
-            configured delays each ``!SWITCH`` command carries ~2 s of
-            ``_recv_until_timeout`` overhead, so a 4-bank boot sequence
-            takes ~8–13 s before ``SERVICE_RUNNING`` can be reported.
-            The previous ``waitHint=5000`` (5 s) was too small and caused
-            the SCM to declare a timeout even when no delays were
-            configured.
+            Startup intentionally remains synchronous: ``SERVICE_RUNNING`` is
+            reported only after outlet boot has completed, while periodic
+            ``SERVICE_START_PENDING`` updates keep the SCM informed.
             """
             try:
-                self.ReportServiceStatus(win32service.SERVICE_START_PENDING, waitHint=60000)
+                self._reporting_start_pending = True
+                self._report_start_pending()
                 servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Running boot sequence")
 
                 try:
-                    _run_boot_sequence()
+                    _run_boot_sequence(progress_callback=self._report_start_pending)
                 except Exception as exc:
                     servicemanager.LogErrorMsg(f"{SERVICE_NAME}: Boot failed: {exc}")
                     logger.error("Boot sequence failed: %s", exc)
 
+                self._reporting_start_pending = False
                 self.ReportServiceStatus(win32service.SERVICE_RUNNING)
                 servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Service running")
 
                 # Block until stop event is signalled
                 win32event.WaitForSingleObject(self.stop_event, win32event.INFINITE)
 
-                # Run shutdown sequence after stop event
-                servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Running shutdown sequence")
-                try:
-                    _run_shutdown_sequence()
-                except Exception as exc:
-                    servicemanager.LogErrorMsg(f"{SERVICE_NAME}: Shutdown failed: {exc}")
-                    logger.error("Shutdown sequence failed: %s", exc)
+                # Run shutdown sequence after stop event unless SvcShutdown already did it.
+                if not self._shutdown_done:
+                    servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Running shutdown sequence")
+                    try:
+                        _run_shutdown_sequence()
+                    except Exception as exc:
+                        servicemanager.LogErrorMsg(f"{SERVICE_NAME}: Shutdown failed: {exc}")
+                        logger.error("Shutdown sequence failed: %s", exc)
 
             finally:
                 self.ReportServiceStatus(win32service.SERVICE_STOPPED)
@@ -148,7 +167,7 @@ if _PYWIN32_AVAILABLE:
 
         def SvcStop(self) -> None:
             """Handle SERVICE_CONTROL_STOP."""
-            self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING, waitHint=5000)
+            self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING, waitHint=60000)
             servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Stop requested")
             win32event.SetEvent(self.stop_event)
 
@@ -158,13 +177,15 @@ if _PYWIN32_AVAILABLE:
             On system shutdown there is limited time, so we run powerdown()
             directly in the handler (matching C++ behaviour).
             """
-            self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING, waitHint=5000)
+            self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING, waitHint=60000)
             servicemanager.LogInfoMsg(f"{SERVICE_NAME}: System shutdown — running shutdown now")
+            self._shutdown_done = True
             try:
                 _run_shutdown_sequence()
             except Exception as exc:
                 servicemanager.LogErrorMsg(f"{SERVICE_NAME}: Shutdown failed: {exc}")
-            win32event.SetEvent(self.stop_event)
+            finally:
+                win32event.SetEvent(self.stop_event)
 
 else:
 
@@ -189,8 +210,6 @@ def _find_service_exe() -> str | None:
     When the CLI (juicer.exe) installs the service, the Windows Service Control Manager
     must be pointed at the dedicated service host binary (juicer-svc.exe), not the CLI.
     """
-    import os
-
     current_dir = os.path.dirname(os.path.abspath(sys.executable))
     svc_exe = os.path.join(current_dir, "juicer-svc.exe")
     return svc_exe if os.path.isfile(svc_exe) else None
@@ -205,10 +224,7 @@ def _find_pythonservice_exe() -> str | None:
     "Access is denied."  Passing the already-installed path directly as ``exeName``
     to :func:`win32serviceutil.InstallService` skips the relocation step entirely.
     """
-    import os
-    import site
-
-    search_dirs: list[str] = []
+    search_dirs: list[str] = [os.path.join(sys.prefix, "Lib", "site-packages")]
     if hasattr(site, "getsitepackages"):
         search_dirs.extend(site.getsitepackages())
     user_site = site.getusersitepackages()
@@ -304,18 +320,18 @@ def run_debug() -> None:
     win32serviceutil.HandleCommandLine(JuicerService)
 
 
-if __name__ == "__main__":
-    # Entry point for juicer-svc.exe.
-    # Delegates to pywin32's HandleCommandLine which registers this executable
-    # with the Service Control Manager and handles start/stop/install commands.
+def main() -> None:
+    """Entry point for juicer-svc.exe / ``python -m juicer.service``."""
     if _PYWIN32_AVAILABLE:
         win32serviceutil.HandleCommandLine(JuicerService)
     else:
-        import sys as _sys
-
         print(
             "pywin32 is required for service operations. "
             "Install with: pip install pywin32",
-            file=_sys.stderr,
+            file=sys.stderr,
         )
-        _sys.exit(1)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

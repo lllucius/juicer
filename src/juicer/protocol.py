@@ -14,7 +14,7 @@ import logging
 import re
 import time
 from collections import deque
-from typing import Any, Sequence
+from typing import Any, Sequence, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -33,7 +33,7 @@ class ProtocolError(JuicerError):
     """Invalid or unexpected data on the wire."""
 
 
-class TimeoutError(JuicerError):  # noqa: A001
+class JuicerTimeoutError(JuicerError):
     """No response within deadline."""
 
 
@@ -190,6 +190,12 @@ class BatteryThresholdResponse(BaseModel):
     level: int
 
 
+class BatteryThresholdGlobalResponse(BaseModel):
+    """``$BTHRESH = <level>`` from ``?LIST_CONFIG``."""
+
+    level: int
+
+
 class BuzzerResponse(BaseModel):
     """``$BUZZER = <mode>``."""
 
@@ -310,6 +316,12 @@ class LoadResponse(BaseModel):
     percent: float
 
 
+class IDLineResponse(BaseModel):
+    """Plain ``$<text>`` line returned by ``?ID``."""
+
+    text: str
+
+
 class IDResponse(BaseModel):
     """Aggregate of the three ``?ID`` response lines."""
 
@@ -360,6 +372,7 @@ ParsedResponse = (
     | PowerStatusResponse
     | BatteryLevelResponse
     | BatteryThresholdResponse
+    | BatteryThresholdGlobalResponse
     | BuzzerResponse
     | AVRModeResponse
     | FeedbackResponse
@@ -380,8 +393,11 @@ ParsedResponse = (
     | CurrentResponse
     | VoltageResponse
     | LoadResponse
+    | IDLineResponse
     | RawResponse
 )
+
+T = TypeVar("T", bound=ParsedResponse)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -404,7 +420,7 @@ def cmd_all_off() -> str:
 def cmd_switch(bank: int | BankNumber, state: str | BankState) -> str:
     """Build ``!SWITCH <bank> <ON|OFF>\\r``."""
     b = BankNumber(bank)
-    s = BankState(state.upper() if isinstance(state, str) else state.value)
+    s = state if isinstance(state, BankState) else BankState(state.upper())
     return f"!SWITCH {b.value} {s.value}{CR}"
 
 
@@ -544,6 +560,7 @@ _RE_BUTTON = re.compile(r"^\$BUTTON\s*=\s*(ON|OFF)$")
 _RE_PWR = re.compile(r"^\$PWR\s*=\s*(.+)$")
 _RE_BATTERY = re.compile(r"^\$BATTERY\s*=\s*(\d+)$")
 _RE_BTHRESH = re.compile(r"^\$BTHRESH\s+(\d)\s*=\s*(\d+)$")
+_RE_BTHRESH_GLOBAL = re.compile(r"^\$BTHRESH\s*=\s*(\d+)$")
 _RE_BUZZER = re.compile(r"^\$BUZZER\s*=\s*(ON|OFF)$")
 _RE_AVR_MODE = re.compile(r"^\$AVR\s*=\s*(OFF|STANDARD|SENSITIVE)$")
 _RE_FEEDBACK = re.compile(r"^\$FEEDBACK\s*=\s*(ON|OFF)$")
@@ -593,6 +610,8 @@ def parse_line(line: str) -> ParsedResponse:
         return BatteryLevelResponse(level=int(m.group(1)))
     if m := _RE_BTHRESH.match(line):
         return BatteryThresholdResponse(bank=BankNumber(int(m.group(1))), level=int(m.group(2)))
+    if m := _RE_BTHRESH_GLOBAL.match(line):
+        return BatteryThresholdGlobalResponse(level=int(m.group(1)))
     if m := _RE_BUZZER.match(line):
         return BuzzerResponse(mode=BuzzerMode(m.group(1)))
     if m := _RE_AVR_MODE.match(line):
@@ -629,8 +648,18 @@ def parse_line(line: str) -> ParsedResponse:
         return BatteryStateResponse(state=BatteryChargeState(m.group(1)))
 
     # ID response lines (manufacturer, model, firmware) — plain $<text>
+    if line.startswith("$"):
+        return IDLineResponse(text=line[1:].strip())
     return RawResponse(raw=line)
 
+
+
+# Fixed response counts for commands with documented response sizes.
+_ID_RESPONSE_LINES = 3
+_MAX_ALL_BANK_RESPONSES = 4
+_MAX_SWITCH_RESPONSES = 1
+_MAX_CONFIG_SET_RESPONSES = 1
+_HELP_RESPONSE_LINES = 25
 
 # ──────────────────────────────────────────────────────────────────────
 # Transport Abstraction
@@ -656,7 +685,7 @@ class Transport(abc.ABC):
     def read_line(self, timeout: float = 2.0) -> str:
         """Read one CR-terminated line. Returns the line *without* the CR.
 
-        Raises ``TimeoutError`` if no complete line within *timeout* seconds.
+        Raises ``JuicerTimeoutError`` if no complete line within *timeout* seconds.
         """
 
     @property
@@ -703,6 +732,7 @@ class SerialTransport(Transport):
                     parity=serial.PARITY_NONE,
                     stopbits=serial.STOPBITS_ONE,
                     timeout=0.1,  # per-byte read timeout
+                    write_timeout=2.0,
                 )
                 logger.info("Opened serial port %s (attempt %d)", self.port, attempt + 1)
                 return
@@ -747,7 +777,7 @@ class SerialTransport(Transport):
                     self._pending_byte = peek
                 return buf.decode("ascii", errors="replace")
             buf.append(b[0])
-        raise TimeoutError(f"No CR-terminated line within {timeout}s")
+        raise JuicerTimeoutError(f"No CR-terminated line within {timeout}s")
 
     @property
     def is_open(self) -> bool:
@@ -786,7 +816,7 @@ class FakeTransport(Transport):
         if not self._open:
             raise TransportError("FakeTransport not open")
         if not self._responses:
-            raise TimeoutError("No more queued responses in FakeTransport")
+            raise JuicerTimeoutError("No more queued responses in FakeTransport")
         return self._responses.popleft()
 
     @property
@@ -810,7 +840,7 @@ class FakeTransport(Transport):
 
     @property
     def last_command(self) -> str | None:
-        """Last command string sent."""
+        """Last command string sent, or ``None`` if no command has been written."""
         return self._written[-1] if self._written else None
 
     def clear(self) -> None:
@@ -857,71 +887,136 @@ class JuicerClient:
     def _recv_until_timeout(
         self, timeout: float = 0.5, max_lines: int = 20
     ) -> list[ParsedResponse]:
-        """Read lines until timeout (for variable-length responses)."""
+        """Read variable-length responses, stopping after a quiet timeout."""
         results: list[ParsedResponse] = []
         for _ in range(max_lines):
             try:
                 results.append(self._recv_parsed(timeout))
-            except TimeoutError:
+            except JuicerTimeoutError:
                 break
         return results
+
+    def _expect_one(
+        self,
+        expected_type: type[T],
+        *,
+        timeout: float = 2.0,
+        context: str = "",
+    ) -> T:
+        """Read one protocol-defined response and validate its type."""
+        resp = self._recv_parsed(timeout)
+        label = context or expected_type.__name__
+        if isinstance(resp, InvalidParameterResponse):
+            raise ProtocolError(f"{label}: device returned $INVALID_PARAMETER")
+        if isinstance(resp, expected_type):
+            return resp
+        raise ProtocolError(f"{label}: expected {expected_type.__name__}, got {resp!r}")
+
+    def _expect_bank_status(
+        self,
+        bank: int | BankNumber,
+        *,
+        state: str | BankState | None = None,
+        timeout: float = 2.0,
+        context: str = "!SWITCH",
+    ) -> BankStatusResponse:
+        """Read and validate one bank status response."""
+        expected_bank = BankNumber(bank)
+        expected_state = (
+            None
+            if state is None
+            else state
+            if isinstance(state, BankState)
+            else BankState(state.upper())
+        )
+        resp = self._expect_one(BankStatusResponse, timeout=timeout, context=context)
+        if resp.bank != expected_bank:
+            raise ProtocolError(
+                f"{context}: expected bank {expected_bank.value}, got bank {resp.bank.value}"
+            )
+        if expected_state is not None and resp.state != expected_state:
+            raise ProtocolError(
+                f"{context}: expected bank {expected_bank.value} {expected_state.value}, "
+                f"got {resp.state.value}"
+            )
+        return resp
+
+    def _expect_all_bank_statuses(
+        self,
+        state: BankState,
+        *,
+        context: str,
+    ) -> list[ParsedResponse]:
+        responses: list[ParsedResponse] = []
+        for bank in BankNumber:
+            responses.append(self._expect_bank_status(bank, state=state, context=context))
+        return responses
 
     # ── Commands ──────────────────────────────────────────────────────
 
     def all_on(self) -> list[ParsedResponse]:
-        """Send ``!ALL_ON`` and collect responses (bank statuses + button)."""
+        """Send ``!ALL_ON`` and collect bank status responses."""
         self._send(cmd_all_on())
-        return self._recv_until_timeout(timeout=2.0, max_lines=10)
+        return self._expect_all_bank_statuses(BankState.ON, context="!ALL_ON")
 
     def all_off(self) -> list[ParsedResponse]:
-        """Send ``!ALL_OFF`` and collect responses."""
+        """Send ``!ALL_OFF`` and collect bank status responses."""
         self._send(cmd_all_off())
-        return self._recv_until_timeout(timeout=2.0, max_lines=10)
+        return self._expect_all_bank_statuses(BankState.OFF, context="!ALL_OFF")
 
     def switch(self, bank: int | BankNumber, state: str | BankState) -> list[ParsedResponse]:
-        """Send ``!SWITCH`` and collect response(s)."""
+        """Send ``!SWITCH`` and collect the bank status response."""
         self._send(cmd_switch(bank, state))
-        return self._recv_until_timeout(timeout=2.0, max_lines=5)
+        return [self._expect_bank_status(bank, state=state, context="!SWITCH")]
 
     def set_batthresh(self, bank: int | BankNumber, level: int) -> list[ParsedResponse]:
         """Send ``!SET_BATTHRESH`` and read response."""
         self._send(cmd_set_batthresh(bank, level))
-        return self._recv_until_timeout(timeout=2.0, max_lines=3)
+        resp = self._expect_one(
+            BatteryThresholdResponse,
+            context="!SET_BATTHRESH",
+        )
+        expected_bank = BankNumber(bank)
+        if resp.bank != expected_bank:
+            raise ProtocolError(
+                f"!SET_BATTHRESH: expected bank {expected_bank.value}, got bank {resp.bank.value}"
+            )
+        return [resp]
 
     def set_buzzer(self, mode: str | BuzzerMode) -> list[ParsedResponse]:
         """Send ``!SET_BUZZER``."""
         self._send(cmd_set_buzzer(mode))
-        return self._recv_until_timeout(timeout=2.0, max_lines=3)
+        return [self._expect_one(BuzzerResponse, context="!SET_BUZZER")]
 
     def set_avr(self, mode: str | AVRMode) -> list[ParsedResponse]:
         """Send ``!SET_AVR``."""
         self._send(cmd_set_avr(mode))
-        return self._recv_until_timeout(timeout=2.0, max_lines=3)
+        return [self._expect_one(AVRModeResponse, context="!SET_AVR")]
 
     def set_feedback(self, mode: str | FeedbackMode) -> list[ParsedResponse]:
         """Send ``!SET_FEEDBACK``."""
         self._send(cmd_set_feedback(mode))
-        return self._recv_until_timeout(timeout=2.0, max_lines=3)
+        return [self._expect_one(FeedbackResponse, context="!SET_FEEDBACK")]
 
     def set_linefeed(self, mode: str | LinefeedMode) -> list[ParsedResponse]:
         """Send ``!SET_LINEFEED``."""
         self._send(cmd_set_linefeed(mode))
-        return self._recv_until_timeout(timeout=2.0, max_lines=3)
+        return [self._expect_one(LinefeedResponse, context="!SET_LINEFEED")]
 
     def set_bright(self, level: str | Brightness) -> list[ParsedResponse]:
         """Send ``!SET_BRIGHT``."""
         self._send(cmd_set_bright(level))
-        return self._recv_until_timeout(timeout=2.0, max_lines=3)
+        return [self._expect_one(BrightnessResponse, context="!SET_BRIGHT")]
 
     def set_scrollmode(self, mode: str | ScrollMode) -> list[ParsedResponse]:
         """Send ``!SET_SCROLLMODE``."""
         self._send(cmd_set_scrollmode(mode))
-        return self._recv_until_timeout(timeout=2.0, max_lines=3)
+        return [self._expect_one(ScrollModeResponse, context="!SET_SCROLLMODE")]
 
     def set_sleepmode(self, mode: str | SleepMode) -> list[ParsedResponse]:
         """Send ``!SET_SLEEPMODE``."""
         self._send(cmd_set_sleepmode(mode))
-        return self._recv_until_timeout(timeout=2.0, max_lines=3)
+        return [self._expect_one(SleepModeResponse, context="!SET_SLEEPMODE")]
 
     def reset_all(self) -> FactoryResetResponse:
         """Send ``!RESET_ALL`` and expect factory-reset confirmation."""
@@ -934,18 +1029,21 @@ class JuicerClient:
     def set_normalvolt(self, voltage: str | NormalVolt) -> list[ParsedResponse]:
         """Send ``!SET_NORMALVOLT``."""
         self._send(cmd_set_normalvolt(voltage))
-        return self._recv_until_timeout(timeout=2.0, max_lines=3)
+        return [self._expect_one(NormalVoltResponse, context="!SET_NORMALVOLT")]
 
     # ── Queries ───────────────────────────────────────────────────────
 
     def query_id(self) -> IDResponse:
         """Send ``?ID`` and parse the three-line response."""
         self._send(query_id())
-        lines = [self._recv() for _ in range(3)]
+        responses = [self._recv_parsed() for _ in range(_ID_RESPONSE_LINES)]
+        if not all(isinstance(resp, IDLineResponse) for resp in responses):
+            raise ProtocolError(f"Unexpected ?ID response lines: {responses!r}")
+        id_lines = [resp.text for resp in responses if isinstance(resp, IDLineResponse)]
         return IDResponse(
-            manufacturer=lines[0].lstrip("$").strip(),
-            model=lines[1].lstrip("$").strip(),
-            firmware=lines[2].lstrip("$").strip(),
+            manufacturer=id_lines[0],
+            model=id_lines[1],
+            firmware=id_lines[2],
         )
 
     def query_outlet_status(self) -> OutletStatusResponse:
@@ -957,7 +1055,11 @@ class JuicerClient:
             if isinstance(resp, BankStatusResponse):
                 banks[resp.bank.value] = resp.state
             else:
-                logger.warning("Unexpected response in OUTLETSTAT: %r", resp)
+                raise ProtocolError(f"Unexpected ?OUTLETSTAT response: {resp!r}")
+        missing = set(range(1, 5)) - banks.keys()
+        if missing:
+            missing_banks = ", ".join(str(bank) for bank in sorted(missing))
+            raise ProtocolError(f"?OUTLETSTAT response missing banks: {missing_banks}")
         return OutletStatusResponse(banks=banks)
 
     def query_power_status(self) -> PowerStatusResponse:
@@ -983,12 +1085,17 @@ class JuicerClient:
             elif isinstance(resp, CurrentResponse):
                 data["current"] = resp.amps
             else:
-                logger.warning("Unexpected in POWER: %r", resp)
+                raise ProtocolError(f"Unexpected ?POWER response: {resp!r}")
+        required = {"volts_in", "volts_out", "watts", "current"}
+        missing = required - data.keys()
+        if missing:
+            missing_fields = ", ".join(sorted(missing))
+            raise ProtocolError(f"?POWER response missing fields: {missing_fields}")
         return PowerMetricsResponse(
-            volts_in=data.get("volts_in", 0),
-            volts_out=data.get("volts_out", 0),
-            watts=data.get("watts", 0),
-            current=data.get("current", 0),
+            volts_in=data["volts_in"],
+            volts_out=data["volts_out"],
+            watts=data["watts"],
+            current=data["current"],
         )
 
     def query_current(self) -> CurrentResponse:
@@ -1043,9 +1150,9 @@ class JuicerClient:
         """Send ``?LIST_CONFIG`` and aggregate response lines."""
         self._send(query_list_config())
         cfg = ListConfigResponse()
-        responses = self._recv_until_timeout(timeout=2.0, max_lines=15)
+        responses = self._recv_n(10)
         for resp in responses:
-            if isinstance(resp, BatteryThresholdResponse):
+            if isinstance(resp, BatteryThresholdResponse | BatteryThresholdGlobalResponse):
                 cfg.bthresh = resp.level
             elif isinstance(resp, BuzzerResponse):
                 cfg.buzzer = resp.mode
@@ -1063,21 +1170,22 @@ class JuicerClient:
                 cfg.sleep_mode = resp.mode
             elif isinstance(resp, NormalVoltResponse):
                 cfg.normalvolt = resp.voltage
-            # $BTHRESH without bank number in LIST_CONFIG
-            elif isinstance(resp, RawResponse) and resp.raw.startswith("$BTHRESH"):
-                m = re.match(r"\$BTHRESH\s*=\s*(\d+)", resp.raw)
-                if m:
-                    cfg.bthresh = int(m.group(1))
+            elif isinstance(resp, InvalidParameterResponse):
+                raise ProtocolError("?LIST_CONFIG: device returned $INVALID_PARAMETER")
+            else:
+                raise ProtocolError(f"?LIST_CONFIG: unexpected response {resp!r}")
         return cfg
 
     def query_help(self) -> list[str]:
         """Send ``?HELP`` and return the list of command/query names."""
         self._send(query_help())
         lines: list[str] = []
-        responses = self._recv_until_timeout(timeout=2.0, max_lines=30)
+        responses = self._recv_n(_HELP_RESPONSE_LINES)
         for resp in responses:
             if isinstance(resp, RawResponse):
                 lines.append(resp.raw)
+            elif isinstance(resp, InvalidParameterResponse):
+                raise ProtocolError("?HELP: device returned $INVALID_PARAMETER")
             else:
-                lines.append(str(resp))
+                raise ProtocolError(f"?HELP: unexpected response {resp!r}")
         return lines
