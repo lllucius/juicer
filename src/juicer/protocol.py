@@ -659,6 +659,7 @@ _ID_RESPONSE_LINES = 3
 _MAX_ALL_BANK_RESPONSES = 4
 _MAX_SWITCH_RESPONSES = 1
 _MAX_CONFIG_SET_RESPONSES = 1
+_HELP_RESPONSE_LINES = 25
 
 # ──────────────────────────────────────────────────────────────────────
 # Transport Abstraction
@@ -1175,7 +1176,7 @@ class JuicerClient:
         """Send ``?HELP`` and return the list of command/query names."""
         self._send(query_help())
         lines: list[str] = []
-        responses = self._recv_n(23)
+        responses = self._recv_n(_HELP_RESPONSE_LINES)
         for resp in responses:
             if isinstance(resp, RawResponse):
                 lines.append(resp.raw)
