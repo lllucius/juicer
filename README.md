@@ -22,9 +22,8 @@ Juicer provides:
 4. [GUI Usage](#gui-usage)
 5. [Configuration](#configuration)
 6. [Windows Service](#windows-service)
-7. [Building Standalone Executables](#building-standalone-executables)
-8. [Development](#development)
-9. [License](#license)
+7. [Development](#development)
+8. [License](#license)
 
 ---
 
@@ -257,76 +256,9 @@ juicer service start
 > **Note**: service installation requires an **elevated (Administrator)**
 > command prompt.
 >
-> When installing from standalone builds, keep `dist\juicer-svc.exe` alongside
-> `dist\juicer.exe`; the service installer registers that dedicated service host
-> with Windows.
-
----
-
-## Building Standalone Executables
-
-Standalone `.exe` files are built with [Nuitka](https://nuitka.net).
-
-### Prerequisites
-
-Install the development dependencies (includes Nuitka) and the package itself:
-
-```bat
-pip install -r requirements-dev.txt -r requirements-windows.txt
-pip install -e .
-```
-
-### Build all executables at once
-
-```bat
-packaging\build.bat
-```
-
-### Build individually
-
-```bat
-set PYTHONPATH=src
-python -m nuitka ^
-    --onefile ^
-    --output-dir=dist ^
-    --output-filename=juicer.exe ^
-    --include-package=juicer ^
-    --nofollow-import-to=PySide6 ^
-    --nofollow-import-to=tkinter ^
-    --assume-yes-for-downloads ^
-    src\juicer\cli.py
-python -m nuitka ^
-    --onefile ^
-    --output-dir=dist ^
-    --output-filename=juicer-gui.exe ^
-    --enable-plugin=pyside6 ^
-    --include-package=juicer ^
-    --nofollow-import-to=tkinter ^
-    --windows-console-mode=disable ^
-    --assume-yes-for-downloads ^
-    src\juicer\gui.py
-python -m nuitka ^
-    --onefile ^
-    --output-dir=dist ^
-    --output-filename=juicer-svc.exe ^
-    --include-package=juicer ^
-    --nofollow-import-to=PySide6 ^
-    --nofollow-import-to=tkinter ^
-    --windows-console-mode=disable ^
-    --assume-yes-for-downloads ^
-    src\juicer\service.py
-```
-
-### Output
-
-| File | Description |
-|------|-------------|
-| `dist\juicer.exe` | CLI — run in a Command Prompt |
-| `dist\juicer-gui.exe` | GUI — double-click to launch |
-| `dist\juicer-svc.exe` | Windows service executable |
-
-> **Tip**: All executables are self-contained — no Python
-> installation is needed on the target machine.
+> The service runs under the installed Python environment through pywin32's
+> native `pythonservice.exe` host. Keep Python, pywin32, and Juicer installed on
+> the target machine after service installation.
 
 ---
 
@@ -346,8 +278,6 @@ juicer/
 │       ├── protocol.py     # Serial protocol (commands, responses, transport)
 │       ├── sequence.py     # Boot/shutdown sequencer
 │       └── service.py      # Windows service wrapper
-├── packaging/
-│   └── build.bat           # Windows build script
 ├── pyproject.toml
 ├── requirements.txt
 ├── requirements-windows.txt

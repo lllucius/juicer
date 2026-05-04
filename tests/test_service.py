@@ -140,42 +140,39 @@ def test_run_boot_sequence_closes_transport_when_progress_callback_after_open_fa
     assert closed == opened
 
 
-def test_install_service_uses_service_exe_next_to_standalone_cli(
+def test_install_service_uses_native_python_service_host(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     service_module = _import_service_with_fake_pywin32()
-    dist_dir = tmp_path / "dist"
-    dist_dir.mkdir()
-    cli_exe = dist_dir / "juicer.exe"
-    svc_exe = dist_dir / "juicer-svc.exe"
-    cli_exe.write_bytes(b"")
-    svc_exe.write_bytes(b"")
+    pythonservice_exe = tmp_path / "pythonservice.exe"
+    pythonservice_exe.write_bytes(b"")
     installed_kwargs: dict[str, object] = {}
 
     def install_service(**kwargs: object) -> None:
         installed_kwargs.update(kwargs)
 
-    monkeypatch.setattr(service_module.sys, "executable", str(cli_exe))
+    monkeypatch.setattr(service_module, "_find_pythonservice_exe", lambda: str(pythonservice_exe))
     monkeypatch.setattr(service_module.win32serviceutil, "InstallService", install_service)
 
     service_module.install_service()
 
-    assert installed_kwargs["exeName"] == str(svc_exe)
+    assert installed_kwargs["exeName"] == str(pythonservice_exe)
+    assert installed_kwargs["pythonClassString"] == "juicer.service.JuicerService"
 
 
-def test_install_service_reports_missing_service_exe_for_standalone_cli(
+def test_install_service_falls_back_to_pywin32_default_when_pythonservice_not_found(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
     service_module = _import_service_with_fake_pywin32()
-    dist_dir = tmp_path / "dist"
-    dist_dir.mkdir()
-    cli_exe = dist_dir / "juicer.exe"
-    cli_exe.write_bytes(b"")
+    installed_kwargs: dict[str, object] = {}
 
-    monkeypatch.setattr(service_module.sys, "executable", str(cli_exe))
+    def install_service(**kwargs: object) -> None:
+        installed_kwargs.update(kwargs)
+
     monkeypatch.setattr(service_module, "_find_pythonservice_exe", lambda: None)
+    monkeypatch.setattr(service_module.win32serviceutil, "InstallService", install_service)
 
-    with pytest.raises(FileNotFoundError, match="juicer-svc\\.exe was not found"):
-        service_module.install_service()
+    service_module.install_service()
+
+    assert "exeName" not in installed_kwargs

@@ -204,32 +204,6 @@ else:
 # ──────────────────────────────────────────────────────────────────────
 
 
-def _find_service_exe() -> str | None:
-    """Return the path to juicer-svc.exe if it exists alongside the current executable.
-
-    When the CLI (juicer.exe) installs the service, the Windows Service Control Manager
-    must be pointed at the dedicated service host binary (juicer-svc.exe), not the CLI.
-    """
-    candidate_dirs = [os.path.dirname(os.path.abspath(sys.executable))]
-    if sys.argv and sys.argv[0]:
-        candidate_dirs.append(os.path.dirname(os.path.abspath(sys.argv[0])))
-
-    seen_dirs: set[str] = set()
-    for candidate_dir in candidate_dirs:
-        if candidate_dir in seen_dirs:
-            continue
-        seen_dirs.add(candidate_dir)
-        svc_exe = os.path.join(candidate_dir, "juicer-svc.exe")
-        if os.path.isfile(svc_exe):
-            return svc_exe
-    return None
-
-
-def _running_from_standalone_executable() -> bool:
-    executable_name = os.path.basename(sys.executable).lower()
-    return executable_name not in {"python", "python.exe", "pythonw", "pythonw.exe"}
-
-
 def _find_pythonservice_exe() -> str | None:
     """Return the path to pythonservice.exe in its existing site-packages location.
 
@@ -264,25 +238,13 @@ def install_service() -> None:
         startType=win32service.SERVICE_AUTO_START,
         serviceDeps=SERVICE_DEPS,
     )
-    svc_exe = _find_service_exe()
-    if svc_exe is not None:
-        kwargs["exeName"] = svc_exe
-    else:
-        # When no dedicated service binary exists, locate pythonservice.exe in its
-        # current site-packages/win32/ directory and pass it directly.  This avoids
-        # pywin32's built-in relocation logic, which fails on Windows Store Python
-        # installs because the target directory is read-only ("Access is denied.").
-        pythonservice_exe = _find_pythonservice_exe()
-        if pythonservice_exe is not None:
-            kwargs["exeName"] = pythonservice_exe
-        elif _running_from_standalone_executable():
-            executable_dir = os.path.dirname(os.path.abspath(sys.executable))
-            raise FileNotFoundError(
-                "Cannot install the Juicer service from this standalone executable "
-                "because juicer-svc.exe was not found next to it. Build and keep "
-                f"{os.path.join(executable_dir, 'juicer-svc.exe')} alongside "
-                f"{sys.executable}, then run service install again."
-            )
+    # Locate pythonservice.exe in its current site-packages/win32/ directory and
+    # pass it directly. This keeps the service running under native Python and
+    # avoids pywin32's built-in relocation logic, which fails on Windows Store
+    # Python installs because the target directory is read-only ("Access is denied.").
+    pythonservice_exe = _find_pythonservice_exe()
+    if pythonservice_exe is not None:
+        kwargs["exeName"] = pythonservice_exe
     win32serviceutil.InstallService(**kwargs)
     logger.info("Service '%s' installed", SERVICE_NAME)
 
@@ -344,7 +306,7 @@ def run_debug() -> None:
 
 
 def main() -> None:
-    """Entry point for juicer-svc.exe / ``python -m juicer.service``."""
+    """Entry point for ``python -m juicer.service``."""
     if _PYWIN32_AVAILABLE:
         win32serviceutil.HandleCommandLine(JuicerService)
     else:
