@@ -123,7 +123,7 @@ if _PYWIN32_AVAILABLE:
                 boot_thread = threading.Thread(
                     target=self._run_boot,
                     name="juicer-boot",
-                    daemon=True,
+                    daemon=False,
                 )
                 boot_thread.start()
 
@@ -133,8 +133,14 @@ if _PYWIN32_AVAILABLE:
                 # Block until stop event is signalled
                 win32event.WaitForSingleObject(self.stop_event, win32event.INFINITE)
 
-                # Ensure boot sequence has finished before running shutdown.
-                boot_thread.join()
+                # Wait for the boot sequence to finish (with timeout to avoid hanging).
+                boot_thread.join(timeout=60)
+                if boot_thread.is_alive():
+                    servicemanager.LogWarningMsg(
+                        f"{SERVICE_NAME}: Boot sequence still running after 60 s;"
+                        " proceeding to shutdown"
+                    )
+                    logger.warning("Boot thread did not complete within 60 s")
 
                 # Run shutdown sequence after stop event
                 servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Running shutdown sequence")
