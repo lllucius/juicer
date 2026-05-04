@@ -9,14 +9,51 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-    Write-Error "uv is not installed. Install it from https://docs.astral.sh/uv/getting-started/installation/"
+function Get-UvPath {
+    $Command = Get-Command uv -ErrorAction SilentlyContinue
+    if ($Command) {
+        return $Command.Source
+    }
+
+    $Candidates = @()
+    if ($HOME) {
+        $Candidates += Join-Path $HOME ".local\bin\uv.exe"
+    }
+    if ($env:USERPROFILE) {
+        $Candidates += Join-Path $env:USERPROFILE ".local\bin\uv.exe"
+    }
+
+    foreach ($Candidate in $Candidates) {
+        if (Test-Path $Candidate) {
+            return $Candidate
+        }
+    }
+
+    return $null
+}
+
+$Uv = Get-UvPath
+if (-not $Uv) {
+    Write-Host "uv is not installed; installing uv..."
+    Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression
+
+    if ($HOME) {
+        $UvBin = Join-Path $HOME ".local\bin"
+        if ((Test-Path $UvBin) -and (($env:PATH -split ";") -notcontains $UvBin)) {
+            $env:PATH = "$UvBin;$env:PATH"
+        }
+    }
+
+    $Uv = Get-UvPath
+    if (-not $Uv) {
+        Write-Error "uv was installed, but the uv executable was not found. Open a new PowerShell session and run this script again."
+    }
 }
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $RepoRoot
 
-uv venv $Venv
+& $Uv venv $Venv
 
 $Extras = @()
 if ($Dev) { $Extras += "dev" }
@@ -32,7 +69,7 @@ $InstallArgs = @()
 if ($Dev) { $InstallArgs += "-e" }
 
 $Python = Join-Path $Venv "Scripts\python.exe"
-uv pip install --python $Python @InstallArgs $PackageSpec
+& $Uv pip install --python $Python @InstallArgs $PackageSpec
 
 Write-Host ""
 Write-Host "Juicer installed in $Venv."

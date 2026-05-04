@@ -48,7 +48,8 @@ build and test the software on any OS.
 
 Juicer can be installed from source with [uv](https://docs.astral.sh/uv/), which
 creates a local virtual environment and installs the package plus its
-dependencies.
+dependencies. The PowerShell installer bootstraps uv automatically when uv is
+not already available.
 
 ### From source with uv
 
@@ -63,7 +64,7 @@ cd juicer
 # Optional GUI support
 ./scripts/install-uv.sh --gui
 
-# Windows: include Windows-specific dependencies
+# Windows: install uv if needed, then include Windows-specific dependencies
 pwsh -ExecutionPolicy Bypass -File scripts/install-uv.ps1 -Windows
 ```
 
