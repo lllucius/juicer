@@ -96,7 +96,7 @@ def run_sequence(
 
     for bank_num in bank_order:
         if cancel is not None and cancel.is_set():
-            logger.info("Sequence cancelled before bank %d", bank_num)
+            logger.info("Sequence cancelled before next bank")
             return
 
         bank_cfg = seq.bank(bank_num)
@@ -113,7 +113,7 @@ def run_sequence(
             logger.info("Bank %d: pre-delay %d ms", bank_num, bank_cfg.pre_delay_ms)
             sleeper(delay_sec)
             if cancel is not None and cancel.is_set():
-                logger.info("Sequence cancelled after pre-delay for bank %d", bank_num)
+                logger.info("Sequence cancelled after pre-delay")
                 return
 
         # Execute action
@@ -122,6 +122,7 @@ def run_sequence(
             client.switch(bank_num, state_str)
         except Exception as exc:
             logger.error("Bank %d: action failed: %s", bank_num, exc)
+            # Do not play stop_sound here; callers own error cleanup.
             raise
 
         # Post-delay
@@ -130,7 +131,7 @@ def run_sequence(
             logger.info("Bank %d: post-delay %d ms", bank_num, bank_cfg.post_delay_ms)
             sleeper(delay_sec)
             if cancel is not None and cancel.is_set():
-                logger.info("Sequence cancelled after post-delay for bank %d", bank_num)
+                logger.info("Sequence cancelled after post-delay")
                 return
 
     # Play stop sound
