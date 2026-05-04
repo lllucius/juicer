@@ -45,8 +45,15 @@ function Format-PathForComparison {
 
 $Uv = Get-UvPath
 if (-not $Uv) {
-    Write-Host "uv is not installed; installing uv..."
-    Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression
+    Write-Host "uv is not installed; downloading and running the official uv installer..."
+    $Installer = Join-Path ([System.IO.Path]::GetTempPath()) "uv-install-$([Guid]::NewGuid()).ps1"
+    Invoke-RestMethod https://astral.sh/uv/install.ps1 -OutFile $Installer
+    try {
+        & $Installer
+    }
+    finally {
+        Remove-Item $Installer -ErrorAction SilentlyContinue
+    }
 
     if ($HOME) {
         $UvBin = Join-Path $HOME ".local\bin"
@@ -60,7 +67,7 @@ if (-not $Uv) {
 
     $Uv = Get-UvPath
     if (-not $Uv) {
-        Write-Error "uv was installed, but the uv executable was not found in PATH or the expected .local\bin directory."
+        Write-Error "uv was installed, but uv.exe was not found in PATH or .local\bin. Add the uv install directory to PATH or install uv manually, then run this script again."
     }
 }
 
