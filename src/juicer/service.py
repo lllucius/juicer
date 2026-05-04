@@ -187,6 +187,32 @@ def _find_service_exe() -> str | None:
     return svc_exe if os.path.isfile(svc_exe) else None
 
 
+def _find_pythonservice_exe() -> str | None:
+    """Return the path to pythonservice.exe in its existing site-packages location.
+
+    pywin32 normally tries to move pythonservice.exe next to the Python interpreter
+    so that the Service Control Manager can find it.  On Windows Store Python
+    installations that target directory is read-only, so the move fails with
+    "Access is denied."  Passing the already-installed path directly as ``exeName``
+    to :func:`win32serviceutil.InstallService` skips the relocation step entirely.
+    """
+    import os
+    import site
+
+    search_dirs: list[str] = []
+    if hasattr(site, "getsitepackages"):
+        search_dirs.extend(site.getsitepackages())
+    user_site = site.getusersitepackages()
+    if user_site:
+        search_dirs.append(user_site)
+
+    for site_dir in search_dirs:
+        candidate = os.path.join(site_dir, "win32", "pythonservice.exe")
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
 def install_service() -> None:
     """Install the Juicer Windows service."""
     _ensure_pywin32()
@@ -201,6 +227,14 @@ def install_service() -> None:
     svc_exe = _find_service_exe()
     if svc_exe is not None:
         kwargs["exeName"] = svc_exe
+    else:
+        # When no dedicated service binary exists, locate pythonservice.exe in its
+        # current site-packages/win32/ directory and pass it directly.  This avoids
+        # pywin32's built-in relocation logic, which fails on Windows Store Python
+        # installs because the target directory is read-only ("Access is denied.").
+        pythonservice_exe = _find_pythonservice_exe()
+        if pythonservice_exe is not None:
+            kwargs["exeName"] = pythonservice_exe
     win32serviceutil.InstallService(**kwargs)
     logger.info("Service '%s' installed", SERVICE_NAME)
 
