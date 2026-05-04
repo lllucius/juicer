@@ -307,58 +307,7 @@ if _PYSIDE6_AVAILABLE:
             self.combo_port.setEnabled(not connected)
             self.btn_refresh.setEnabled(not connected)
 
-    class SoundSettingsPanel(QWidget):
-        """Startup and shutdown sound path settings."""
 
-        def __init__(self, parent: Optional[QWidget] = None) -> None:
-            super().__init__(parent)
-            layout = QVBoxLayout(self)
-
-            group = QGroupBox("Sound Configuration")
-            group.setAccessibleName("Sound Configuration")
-            form = QFormLayout(group)
-
-            self.edit_start_sound = QLineEdit()
-            self.edit_start_sound.setAccessibleName("Startup Sound Path")
-            form.addRow(
-                "Startup Sound:",
-                self._path_row(self.edit_start_sound, "Browse Startup Sound"),
-            )
-
-            self.edit_stop_sound = QLineEdit()
-            self.edit_stop_sound.setAccessibleName("Shutdown Sound Path")
-            form.addRow(
-                "Shutdown Sound:",
-                self._path_row(self.edit_stop_sound, "Browse Shutdown Sound"),
-            )
-
-            layout.addWidget(group)
-
-        def _path_row(self, edit: QLineEdit, accessible_name: str) -> QWidget:
-            row = QWidget()
-            layout = QHBoxLayout(row)
-            layout.setContentsMargins(0, 0, 0, 0)
-            layout.addWidget(edit)
-
-            btn_browse = QPushButton("Browse…")
-            btn_browse.setAccessibleName(accessible_name)
-            btn_browse.clicked.connect(lambda: self._browse_sound(edit))
-            layout.addWidget(btn_browse)
-            return row
-
-        def _browse_sound(self, edit: QLineEdit) -> None:
-            path, _ = QFileDialog.getOpenFileName(
-                self, "Select Sound File", "", "WAV Files (*.wav);;All Files (*)"
-            )
-            if path:
-                edit.setText(path)
-
-        def set_sounds(self, start_sound: str, stop_sound: str) -> None:
-            self.edit_start_sound.setText(start_sound)
-            self.edit_stop_sound.setText(stop_sound)
-
-        def get_sounds(self) -> tuple[str, str]:
-            return self.edit_start_sound.text().strip(), self.edit_stop_sound.text().strip()
 
     class ManualControlsPanel(QWidget):
         """All-on, all-off, and per-bank switches."""
@@ -424,41 +373,56 @@ if _PYSIDE6_AVAILABLE:
     class _SequenceEditorPanel(QWidget):
         """Shared editor for boot or shutdown sequence configuration."""
 
-        def __init__(self, label: str, parent: Optional[QWidget] = None) -> None:
+        def __init__(
+            self, label: str, sound_label: str, parent: Optional[QWidget] = None
+        ) -> None:
             super().__init__(parent)
             self._label = label
             layout = QVBoxLayout(self)
+
+            # Sound file section
+            sound_group = QGroupBox(f"{sound_label}")
+            sound_group.setAccessibleName(f"{sound_label} Configuration")
+            sound_form = QFormLayout(sound_group)
+            self.edit_sound = QLineEdit()
+            self.edit_sound.setAccessibleName(f"{sound_label} Path")
+            sound_browse_row = self._path_row(self.edit_sound, f"Browse {sound_label}")
+            sound_form.addRow(f"{sound_label}:", sound_browse_row)
+            layout.addWidget(sound_group)
 
             self.bank_widgets: dict[int, dict[str, Any]] = {}
 
             for i in range(1, 5):
                 group = QGroupBox(f"Bank {i}")
                 group.setAccessibleName(f"{label} Bank {i} Configuration")
-                form = QFormLayout(group)
+                row_layout = QHBoxLayout(group)
 
                 # Action combo
+                row_layout.addWidget(QLabel("Action:"))
                 combo = QComboBox()
                 combo.setAccessibleName(f"{label} Bank {i} Action")
                 combo.addItem("No Action", None)
                 combo.addItem("Turn ON", 1)
                 combo.addItem("Turn OFF", 0)
-                form.addRow("Action:", combo)
+                row_layout.addWidget(combo)
 
                 # Pre-delay
+                row_layout.addWidget(QLabel("Delay Before:"))
                 pre_spin = QSpinBox()
                 pre_spin.setAccessibleName(f"{label} Bank {i} Pre-Delay")
                 pre_spin.setRange(0, 60000)
                 pre_spin.setSuffix(" ms")
                 pre_spin.setSingleStep(100)
-                form.addRow("Delay Before:", pre_spin)
+                row_layout.addWidget(pre_spin)
 
                 # Post-delay
+                row_layout.addWidget(QLabel("Delay After:"))
                 post_spin = QSpinBox()
                 post_spin.setAccessibleName(f"{label} Bank {i} Post-Delay")
                 post_spin.setRange(0, 60000)
                 post_spin.setSuffix(" ms")
                 post_spin.setSingleStep(100)
-                form.addRow("Delay After:", post_spin)
+                row_layout.addWidget(post_spin)
 
                 layout.addWidget(group)
                 self.bank_widgets[i] = {
@@ -468,6 +432,31 @@ if _PYSIDE6_AVAILABLE:
                 }
 
             layout.addStretch()
+
+        def _path_row(self, edit: QLineEdit, accessible_name: str) -> QWidget:
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.addWidget(edit)
+
+            btn_browse = QPushButton("Browse…")
+            btn_browse.setAccessibleName(accessible_name)
+            btn_browse.clicked.connect(lambda: self._browse_sound(edit))
+            row_layout.addWidget(btn_browse)
+            return row
+
+        def _browse_sound(self, edit: QLineEdit) -> None:
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Select Sound File", "", "WAV Files (*.wav);;All Files (*)"
+            )
+            if path:
+                edit.setText(path)
+
+        def get_sound(self) -> str:
+            return str(self.edit_sound.text()).strip()
+
+        def set_sound(self, sound: str) -> None:
+            self.edit_sound.setText(sound)
 
         def get_sequence_config(self) -> SequenceConfig:
             """Read current widget values into a SequenceConfig."""
@@ -505,13 +494,13 @@ if _PYSIDE6_AVAILABLE:
         """Editor for the boot sequence (banks 1→4)."""
 
         def __init__(self, parent: Optional[QWidget] = None) -> None:
-            super().__init__("Boot", parent)
+            super().__init__("Boot", "Startup Sound", parent)
 
     class ShutdownSequenceEditor(_SequenceEditorPanel):
         """Editor for the shutdown sequence (banks 4→1)."""
 
         def __init__(self, parent: Optional[QWidget] = None) -> None:
-            super().__init__("Shutdown", parent)
+            super().__init__("Shutdown", "Shutdown Sound", parent)
 
     class ServicePanel(QWidget):
         """Windows service management controls."""
@@ -777,7 +766,6 @@ if _PYSIDE6_AVAILABLE:
             # Create panels
             self.overview = OverviewPanel()
             self.serial_settings = SerialSettingsPanel()
-            self.sound_settings = SoundSettingsPanel()
             self.manual_controls = ManualControlsPanel()
             self.boot_editor = BootSequenceEditor()
             self.shutdown_editor = ShutdownSequenceEditor()
@@ -789,7 +777,6 @@ if _PYSIDE6_AVAILABLE:
             self.overview_tab = QWidget()
             overview_layout = QVBoxLayout(self.overview_tab)
             overview_layout.addWidget(self.serial_settings)
-            overview_layout.addWidget(self.sound_settings)
             overview_layout.addWidget(self.overview)
             overview_layout.addStretch()
 
@@ -875,7 +862,8 @@ if _PYSIDE6_AVAILABLE:
             self._config = config
             if config.port:
                 self.serial_settings.set_current_port(config.port)
-            self.sound_settings.set_sounds(config.start_sound, config.stop_sound)
+            self.boot_editor.set_sound(config.start_sound)
+            self.shutdown_editor.set_sound(config.stop_sound)
             self.boot_editor.set_sequence_config(config.boot)
             self.shutdown_editor.set_sequence_config(config.shutdown)
             self.import_export.set_config(config)
@@ -883,7 +871,8 @@ if _PYSIDE6_AVAILABLE:
         def _save_config(self) -> None:
             """Read editor widgets and save config."""
             self._config.port = self.serial_settings.current_port()
-            self._config.start_sound, self._config.stop_sound = self.sound_settings.get_sounds()
+            self._config.start_sound = self.boot_editor.get_sound()
+            self._config.stop_sound = self.shutdown_editor.get_sound()
             self._config.boot = self.boot_editor.get_sequence_config()
             self._config.shutdown = self.shutdown_editor.get_sequence_config()
             try:
