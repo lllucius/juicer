@@ -46,34 +46,62 @@ build and test the software on any OS.
 
 ## Installation
 
-### From source
+Juicer can be installed from source with [uv](https://docs.astral.sh/uv/), which
+creates a local virtual environment and installs the package plus its
+dependencies.
+
+### From source with uv
 
 ```bash
 # Clone the repository
 git clone https://github.com/lllucius/juicer.git
 cd juicer
 
-# Install core dependencies
-pip install -r requirements.txt
+# Create .venv and install the CLI/runtime package
+./scripts/install-uv.sh
 
 # Optional GUI support
-pip install ".[gui]"
+./scripts/install-uv.sh --gui
 
-# Windows: also install Windows-specific dependencies
-pip install -r requirements-windows.txt
-
-# Or install the package directly (includes all core deps)
-pip install .
+# Windows: include Windows-specific dependencies
+pwsh -ExecutionPolicy Bypass -File scripts/install-uv.ps1 -Windows
 ```
 
-### Editable / developer install
+Activate the environment before running Juicer:
 
 ```bash
-pip install -e ".[dev]"
+source .venv/bin/activate
+juicer --help
+```
+
+On Windows PowerShell:
+
+```powershell
+.venv\Scripts\Activate.ps1
+juicer --help
+```
+
+### Manual uv install
+
+```bash
+uv venv
+uv pip install --python .venv/bin/python .
+
+# Optional extras:
+uv pip install --python .venv/bin/python ".[gui]"
+uv pip install --python .venv/bin/python ".[windows]"
+```
+
+On Windows, use `.venv\Scripts\python.exe` as the `--python` path.
+
+### Editable / developer install with uv
+
+```bash
+./scripts/install-uv.sh --dev
 # With GUI support:
-pip install -e ".[dev,gui]"
+./scripts/install-uv.sh --dev --gui
 # Windows:
-pip install -e ".[dev,windows]"
+pwsh -ExecutionPolicy Bypass -File scripts/install-uv.ps1 -Dev -Windows
 ```
 
 ---
@@ -282,6 +310,9 @@ juicer/
 ├── requirements.txt
 ├── requirements-windows.txt
 ├── requirements-dev.txt
+├── scripts/
+│   ├── install-uv.sh
+│   └── install-uv.ps1
 ├── LICENSE
 └── README.md
 ```
@@ -289,6 +320,9 @@ juicer/
 ### Running from source
 
 ```bash
+# After installing into .venv with uv:
+source .venv/bin/activate
+
 # CLI
 python -m juicer --help
 
