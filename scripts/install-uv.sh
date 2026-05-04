@@ -85,10 +85,11 @@ main() {
     cat <<DONE
 
 Juicer installed in $venv_dir.
-Activate the environment with:
+Activate the environment in a Unix-like shell with:
   source $venv_dir/bin/activate
 Then run:
   juicer --help
+Windows PowerShell users should run scripts/install-uv.ps1 instead.
 DONE
 }
 

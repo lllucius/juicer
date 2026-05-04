@@ -81,11 +81,19 @@ if (-not $Uv) {
 
     Write-Host "uv is not installed; installing uv with Python pip..."
     & $BootstrapPython -m pip install --user uv
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to install uv with Python pip. Ensure pip is available and network access is working, then run this script again."
+    }
 
     $UvBin = Get-PythonUserScriptsPath
     if ($UvBin) {
-        $PathEntries = $env:PATH -split ";" | Where-Object { $_ } | ForEach-Object {
-            Format-PathForComparison $_
+        $PathEntries = @()
+        if ($env:PATH) {
+            foreach ($PathEntry in $env:PATH -split ";") {
+                if (-not [string]::IsNullOrWhiteSpace($PathEntry)) {
+                    $PathEntries += Format-PathForComparison $PathEntry
+                }
+            }
         }
         if ((Test-Path $UvBin) -and ($PathEntries -notcontains (Format-PathForComparison $UvBin))) {
             $env:PATH = "$UvBin;$env:PATH"
