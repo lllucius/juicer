@@ -82,14 +82,14 @@ main() {
 
     uv pip install --python "$python_bin" "${install_args[@]}" "$package_spec"
 
-    cat <<EOF_DONE
+    cat <<DONE
 
 Juicer installed in $venv_dir.
 Activate the environment with:
   source $venv_dir/bin/activate
 Then run:
   juicer --help
-EOF_DONE
+DONE
 }
 
 main "$@"
