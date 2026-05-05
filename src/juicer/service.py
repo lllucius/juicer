@@ -9,19 +9,47 @@ Importable on any OS; runtime methods raise ``OSError`` on non-Windows.
 
 from __future__ import annotations
 
+import ctypes
 import logging
 import os
 import platform
 import site
+import subprocess
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, cast
+from typing import Any, Callable, Literal, cast, get_args
 
 logger = logging.getLogger(__name__)
 
 _WINDOWS = platform.system() == "Windows"
+
+SEE_MASK_NOCLOSEPROCESS = 0x00000040
+SW_SHOWNORMAL = 1
+INFINITE = 0xFFFFFFFF
+
+
+class SHELLEXECUTEINFO(ctypes.Structure):
+    """ctypes mirror of the Win32 SHELLEXECUTEINFO structure."""
+
+    _fields_ = [
+        ("cbSize", ctypes.c_ulong),
+        ("fMask", ctypes.c_ulong),
+        ("hwnd", ctypes.c_void_p),
+        ("lpVerb", ctypes.c_wchar_p),
+        ("lpFile", ctypes.c_wchar_p),
+        ("lpParameters", ctypes.c_wchar_p),
+        ("lpDirectory", ctypes.c_wchar_p),
+        ("nShow", ctypes.c_int),
+        ("hInstApp", ctypes.c_void_p),
+        ("lpIDList", ctypes.c_void_p),
+        ("lpClass", ctypes.c_wchar_p),
+        ("hkeyClass", ctypes.c_void_p),
+        ("dwHotKey", ctypes.c_ulong),
+        ("hIcon", ctypes.c_void_p),
+        ("hProcess", ctypes.c_void_p),
+    ]
 
 # Service constants (matching C++ svc.cpp)
 SERVICE_NAME = "Juicer"
@@ -56,6 +84,80 @@ def _ensure_pywin32() -> None:
 
 
 ProgressCallback = Callable[[], None]
+ServiceCommand = Literal["install", "uninstall", "start", "stop", "restart"]
+ServiceCommandHandler = Callable[..., None]
+_SERVICE_COMMANDS: frozenset[str] = frozenset(get_args(ServiceCommand))
+
+
+def _windows_dll(name: str) -> Any | None:
+    """Return a Windows DLL object from ctypes.windll, or None when unavailable."""
+    windll = getattr(ctypes, "windll", None)
+    if windll is None:
+        return None
+    return getattr(windll, name, None)
+
+
+def _is_user_admin() -> bool:
+    """Return whether the current Windows process is elevated."""
+    if not _WINDOWS:
+        return False
+    shell32 = _windows_dll("shell32")
+    if shell32 is None:
+        return False
+    try:
+        return bool(shell32.IsUserAnAdmin())
+    except (AttributeError, OSError, TypeError):
+        return False
+
+
+def _request_elevated_service_command(command: ServiceCommand) -> None:
+    """Run a service management command through Windows UAC and wait for it."""
+    if command not in _SERVICE_COMMANDS:
+        raise ValueError(f"Unsupported elevated service command: {command}")
+
+    shell32 = _windows_dll("shell32")
+    kernel32 = _windows_dll("kernel32")
+    if shell32 is None or kernel32 is None:
+        raise OSError("Unable to request elevated privileges on this platform")
+
+    params = subprocess.list2cmdline(
+        ["-m", "juicer.service", "--elevated-service-command", command]
+    )
+    shell_execute_ex = shell32.ShellExecuteExW
+    shell_execute_ex.argtypes = [ctypes.POINTER(SHELLEXECUTEINFO)]
+    shell_execute_ex.restype = ctypes.c_bool
+
+    sei = SHELLEXECUTEINFO()
+    sei.cbSize = ctypes.sizeof(SHELLEXECUTEINFO)
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS
+    sei.lpVerb = "runas"
+    sei.lpFile = sys.executable
+    sei.lpParameters = params
+    sei.nShow = SW_SHOWNORMAL
+
+    if not shell_execute_ex(ctypes.byref(sei)):
+        raise OSError("Windows elevation request was cancelled or failed")
+
+    try:
+        kernel32.WaitForSingleObject(sei.hProcess, INFINITE)
+        exit_code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(sei.hProcess, ctypes.byref(exit_code)):
+            raise OSError("Unable to read elevated process exit code")
+        if exit_code.value != 0:
+            raise OSError(
+                f"Elevated service {command} failed with exit code {exit_code.value}; "
+                "run the command from an elevated console for details"
+            )
+    finally:
+        kernel32.CloseHandle(sei.hProcess)
+
+
+def _request_elevation_if_needed(command: ServiceCommand, elevate: bool) -> bool:
+    """Request UAC elevation when needed; return whether the caller should continue."""
+    if _WINDOWS and elevate and not _is_user_admin():
+        _request_elevated_service_command(command)
+        return False
+    return True
 
 
 def _service_log_path(name: str) -> Path:
@@ -280,9 +382,12 @@ def _find_pythonservice_exe() -> str | None:
     return None
 
 
-def install_service() -> None:
+def install_service(*, elevate: bool = True) -> None:
     """Install the Juicer Windows service."""
     _ensure_pywin32()
+    if not _request_elevation_if_needed("install", elevate):
+        logger.info("Service '%s' installation delegated to elevated process", SERVICE_NAME)
+        return
     kwargs: dict[str, object] = dict(
         pythonClassString=f"{__name__}.JuicerService",
         serviceName=SERVICE_NAME,
@@ -302,30 +407,42 @@ def install_service() -> None:
     logger.info("Service '%s' installed", SERVICE_NAME)
 
 
-def uninstall_service() -> None:
+def uninstall_service(*, elevate: bool = True) -> None:
     """Remove the Juicer Windows service."""
     _ensure_pywin32()
+    if not _request_elevation_if_needed("uninstall", elevate):
+        logger.info("Service '%s' removal delegated to elevated process", SERVICE_NAME)
+        return
     win32serviceutil.RemoveService(SERVICE_NAME)
     logger.info("Service '%s' uninstalled", SERVICE_NAME)
 
 
-def start_service() -> None:
+def start_service(*, elevate: bool = True) -> None:
     """Start the Juicer service."""
     _ensure_pywin32()
+    if not _request_elevation_if_needed("start", elevate):
+        logger.info("Service '%s' start delegated to elevated process", SERVICE_NAME)
+        return
     win32serviceutil.StartService(SERVICE_NAME)
     logger.info("Service '%s' started", SERVICE_NAME)
 
 
-def stop_service() -> None:
+def stop_service(*, elevate: bool = True) -> None:
     """Stop the Juicer service."""
     _ensure_pywin32()
+    if not _request_elevation_if_needed("stop", elevate):
+        logger.info("Service '%s' stop delegated to elevated process", SERVICE_NAME)
+        return
     win32serviceutil.StopService(SERVICE_NAME)
     logger.info("Service '%s' stopped", SERVICE_NAME)
 
 
-def restart_service() -> None:
+def restart_service(*, elevate: bool = True) -> None:
     """Restart the Juicer service."""
     _ensure_pywin32()
+    if not _request_elevation_if_needed("restart", elevate):
+        logger.info("Service '%s' restart delegated to elevated process", SERVICE_NAME)
+        return
     win32serviceutil.RestartService(SERVICE_NAME)
     logger.info("Service '%s' restarted", SERVICE_NAME)
 
@@ -358,8 +475,26 @@ def run_debug() -> None:
     win32serviceutil.HandleCommandLine(JuicerService)
 
 
+def _run_service_command_without_elevation(command: str) -> None:
+    if command not in _SERVICE_COMMANDS:
+        raise SystemExit(f"Unsupported service command: {command}")
+    service_command = cast(ServiceCommand, command)
+    handlers: dict[ServiceCommand, ServiceCommandHandler] = {
+        "install": install_service,
+        "uninstall": uninstall_service,
+        "start": start_service,
+        "stop": stop_service,
+        "restart": restart_service,
+    }
+    handlers[service_command](elevate=False)
+
+
 def main() -> None:
     """Entry point for ``python -m juicer.service``."""
+    if len(sys.argv) == 3 and sys.argv[1] == "--elevated-service-command":
+        _run_service_command_without_elevation(sys.argv[2])
+        return
+
     if _PYWIN32_AVAILABLE:
         win32serviceutil.HandleCommandLine(JuicerService)
     else:
