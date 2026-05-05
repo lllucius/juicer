@@ -1006,7 +1006,7 @@ if _PYSIDE6_AVAILABLE:
             self._client: Any = None
             self._config = GlobalConfig()
             self._busy = False
-            self._workers: list[tuple[Any, Any, Any]] = []
+            self._workers: list[tuple[_SerialWorker, QThread, _WorkerCallbacks]] = []
 
             # Central widget with tabs + bottom button row
             central = QWidget()
@@ -1270,8 +1270,8 @@ if _PYSIDE6_AVAILABLE:
                 thread.deleteLater()
                 callbacks.deleteLater()
 
-            thread.started.connect(worker.run)
             callbacks = _WorkerCallbacks(success, error, cleanup, self)
+            thread.started.connect(worker.run)
             worker.finished.connect(callbacks.on_finished, Qt.ConnectionType.QueuedConnection)
             worker.error.connect(callbacks.on_error, Qt.ConnectionType.QueuedConnection)
             self._workers.append((worker, thread, callbacks))
