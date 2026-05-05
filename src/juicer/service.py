@@ -86,10 +86,11 @@ def _ensure_pywin32() -> None:
 ProgressCallback = Callable[[], None]
 ServiceCommand = Literal["install", "uninstall", "start", "stop", "restart"]
 ServiceCommandHandler = Callable[..., None]
-_SERVICE_COMMANDS: frozenset[str] = frozenset(str(command) for command in get_args(ServiceCommand))
+_SERVICE_COMMANDS: frozenset[str] = frozenset(get_args(ServiceCommand))
 
 
 def _windows_dll(name: str) -> Any | None:
+    """Return a Windows DLL object from ctypes.windll, or None when unavailable."""
     windll = getattr(ctypes, "windll", None)
     if windll is None:
         return None

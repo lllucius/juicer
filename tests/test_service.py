@@ -298,7 +298,7 @@ def test_service_management_can_skip_elevation_request(
     def install_service(**kwargs: object) -> None:
         installed_kwargs.update(kwargs)
 
-    def fail_elevation(command: str) -> None:
+    def fail_elevation(_: str) -> None:
         raise AssertionError("unexpected elevation request")
 
     monkeypatch.setattr(service_module, "_is_user_admin", lambda: False)
