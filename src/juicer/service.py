@@ -282,11 +282,23 @@ if _PYWIN32_AVAILABLE:
                     waitHint=60000,
                 )
 
+        def SvcRun(self) -> None:
+            """Service entry point called by the C framework.
+
+            Overrides ``ServiceFramework.SvcRun`` to prevent it from
+            reporting ``SERVICE_RUNNING`` before the boot sequence completes.
+            All status transitions are handled by ``SvcDoRun``.
+            """
+            self.SvcDoRun()
+            # Tell the SCM we are winding down; the C framework will set
+            # SERVICE_STOPPED once this method returns.
+            self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
+
         def SvcDoRun(self) -> None:
             """Main service entry: boot → wait → shutdown.
 
-            Startup intentionally remains synchronous: ``SERVICE_RUNNING`` is
-            reported only after outlet boot has completed, while periodic
+            Startup remains synchronous: ``SERVICE_RUNNING`` is reported only
+            after outlet boot has completed, while periodic
             ``SERVICE_START_PENDING`` updates keep the SCM informed.
             """
             try:
@@ -305,6 +317,11 @@ if _PYWIN32_AVAILABLE:
                     return
 
                 self._reporting_start_pending = False
+
+                # Only report RUNNING if stop has not already been requested.
+                if win32event.WaitForSingleObject(self.stop_event, 0) == win32event.WAIT_OBJECT_0:
+                    return
+
                 self.ReportServiceStatus(win32service.SERVICE_RUNNING)
                 servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Service running")
 
@@ -387,6 +404,89 @@ def _find_pythonservice_exe() -> str | None:
     return None
 
 
+def _set_service_env() -> None:
+    """Write ``PYTHONPATH`` and extra ``PATH`` entries to the service registry.
+
+    ``pythonservice.exe`` initialises Python before connecting to the Service
+    Control Manager.  When pywin32 is installed inside a virtual environment
+    (or when the Python interpreter directory is not on the *system* ``PATH``),
+    the SCM's fresh process cannot find ``servicemanager.pyd`` or
+    ``python3XX.dll``, so the import fails and the process exits before calling
+    ``StartServiceCtrlDispatcher``.  After 30 seconds the SCM reports
+    error 1053 ("service did not respond in a timely fashion").
+
+    Setting the service's ``Environment`` registry value to include the
+    relevant directories ensures the service process inherits a ``PYTHONPATH``
+    that covers both pywin32's ``win32`` sub-directory (needed for
+    ``servicemanager``) and the directory that contains the ``juicer`` package,
+    as well as a ``PATH`` addition that allows ``python3XX.dll`` and
+    ``pywintypes3XX.dll`` to be found when Python is not in the system
+    ``PATH``.
+    """
+    try:
+        import winreg
+    except ImportError:
+        return  # Not running on Windows; nothing to configure.
+
+    python_path_entries: list[str] = []
+    path_entries: list[str] = []
+
+    # The win32 sub-directory of the active pywin32 installation contains
+    # servicemanager.pyd and the other pywin32 extension modules.
+    try:
+        win32_dir = str(Path(win32service.__file__).parent)
+        python_path_entries.append(win32_dir)
+        path_entries.append(win32_dir)
+    except Exception:
+        pass
+
+    # The directory containing the juicer package (site-packages or src/).
+    try:
+        import juicer as _juicer_pkg
+
+        juicer_parent = str(Path(_juicer_pkg.__file__).parent.parent.resolve())
+        if juicer_parent not in python_path_entries:
+            python_path_entries.append(juicer_parent)
+    except Exception:
+        pass
+
+    # The base Python installation directory holds python3XX.dll and is
+    # required when Python was installed for the current user only (and its
+    # directory is therefore not on the system PATH).
+    try:
+        base_prefix = str(Path(sys.base_exec_prefix).resolve())
+        if base_prefix not in path_entries:
+            path_entries.append(base_prefix)
+    except Exception:
+        pass
+
+    env_values: list[str] = []
+    if python_path_entries:
+        env_values.append("PYTHONPATH=" + ";".join(python_path_entries))
+    if path_entries:
+        env_values.append("PATH=" + ";".join(path_entries))
+
+    if not env_values:
+        return
+
+    key_path = f"SYSTEM\\CurrentControlSet\\Services\\{SERVICE_NAME}"
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            key_path,
+            0,
+            winreg.KEY_SET_VALUE,
+        ) as key:
+            winreg.SetValueEx(key, "Environment", 0, winreg.REG_MULTI_SZ, env_values)
+    except OSError as exc:
+        logger.warning(
+            "Could not write service environment to registry (%s); "
+            "if the service fails to start with error 1053, run "
+            "'pywin32_postinstall.py -install' from an elevated prompt",
+            exc,
+        )
+
+
 def install_service(*, elevate: bool = True) -> None:
     """Install the Juicer Windows service."""
     _ensure_pywin32()
@@ -409,6 +509,7 @@ def install_service(*, elevate: bool = True) -> None:
     if pythonservice_exe is not None:
         kwargs["exeName"] = pythonservice_exe
     win32serviceutil.InstallService(**kwargs)
+    _set_service_env()
     logger.info("Service '%s' installed", SERVICE_NAME)
 
 
