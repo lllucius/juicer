@@ -233,6 +233,7 @@ def test_install_service_uses_native_python_service_host(
     def install_service(**kwargs: object) -> None:
         installed_kwargs.update(kwargs)
 
+    monkeypatch.setattr(service_module, "_is_user_admin", lambda: True)
     monkeypatch.setattr(service_module, "_find_pythonservice_exe", lambda: str(pythonservice_exe))
     monkeypatch.setattr(service_module.win32serviceutil, "InstallService", install_service)
 
@@ -251,6 +252,7 @@ def test_install_service_falls_back_to_pywin32_default_when_pythonservice_not_fo
     def install_service(**kwargs: object) -> None:
         installed_kwargs.update(kwargs)
 
+    monkeypatch.setattr(service_module, "_is_user_admin", lambda: True)
     monkeypatch.setattr(service_module, "_find_pythonservice_exe", lambda: None)
     monkeypatch.setattr(service_module.win32serviceutil, "InstallService", install_service)
 
@@ -279,6 +281,12 @@ def test_service_management_requests_elevation_when_not_admin(
     service_module.install_service()
 
     assert requested == ["install"]
+
+
+def test_admin_check_defaults_to_not_elevated_when_status_is_unavailable() -> None:
+    service_module = _import_service_with_fake_pywin32()
+
+    assert service_module._is_user_admin() is False
 
 
 def test_service_management_can_skip_elevation_request(

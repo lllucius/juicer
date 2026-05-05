@@ -101,7 +101,7 @@ def _is_user_admin() -> bool:
         return False
     shell32 = getattr(getattr(ctypes, "windll", None), "shell32", None)
     if shell32 is None:
-        return True
+        return False
     try:
         return bool(shell32.IsUserAnAdmin())
     except Exception:
