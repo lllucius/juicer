@@ -21,6 +21,7 @@ logger = logging.getLogger("juicer")
 
 
 def _setup_logging(verbose: bool) -> None:
+    """Configure process-wide logging for CLI commands."""
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,

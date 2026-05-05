@@ -86,14 +86,17 @@ if _PYSIDE6_AVAILABLE:
         """Logging handler that emits records to a Qt signal."""
 
         def __init__(self) -> None:
+            """Create the internal QObject used to forward log records into Qt."""
             super().__init__()
             self._signal = _QtLogSignal()
 
         @property
         def message_signal(self) -> Signal:
+            """Expose the Qt signal consumed by the log viewer widget."""
             return self._signal.message
 
         def emit(self, record: logging.LogRecord) -> None:
+            """Format and forward one logging record to the GUI thread."""
             msg = self.format(record)
             self._signal.message.emit(msg)
 
@@ -124,6 +127,7 @@ if _PYSIDE6_AVAILABLE:
         error = Signal(str)
 
         def __init__(self, func: Any, *args: Any, **kwargs: Any) -> None:
+            """Capture the callable and arguments that will run in a worker thread."""
             super().__init__()
             self._func = func
             self._args = args
@@ -131,6 +135,7 @@ if _PYSIDE6_AVAILABLE:
 
         @Slot()
         def run(self) -> None:
+            """Execute the queued callable and emit either its result or error text."""
             try:
                 result = self._func(*self._args, **self._kwargs)
                 self.finished.emit(result)
@@ -147,6 +152,7 @@ if _PYSIDE6_AVAILABLE:
             cleanup: Callable[[], None],
             parent: QObject,
         ) -> None:
+            """Store main-thread callbacks for worker completion, failure, and teardown."""
             super().__init__(parent)
             self._success = success
             self._error = error
@@ -154,6 +160,7 @@ if _PYSIDE6_AVAILABLE:
 
         @Slot(object)
         def on_finished(self, result: object) -> None:
+            """Handle a successful worker result and always release thread resources."""
             try:
                 self._success(result)
             finally:
@@ -161,6 +168,7 @@ if _PYSIDE6_AVAILABLE:
 
         @Slot(str)
         def on_error(self, message: str) -> None:
+            """Handle a worker failure message and always release thread resources."""
             try:
                 self._error(message)
             finally:
@@ -174,6 +182,7 @@ if _PYSIDE6_AVAILABLE:
         """Connection status and bank states at a glance."""
 
         def __init__(self, parent: Optional[QWidget] = None) -> None:
+            """Build the read-only overview widgets shown on the first tab."""
             super().__init__(parent)
             layout = QVBoxLayout(self)
 
@@ -230,23 +239,28 @@ if _PYSIDE6_AVAILABLE:
             layout.addStretch()
 
         def set_connected(self, port: str) -> None:
+            """Show that the GUI is connected to the supplied serial port."""
             self.lbl_port.setText(port)
             self.lbl_status.setText("Connected")
             self.lbl_status.setStyleSheet("color: green; font-weight: bold;")
 
         def set_disconnected(self) -> None:
+            """Reset the overview to its disconnected visual state."""
             self.lbl_port.setText("Not connected")
             self.lbl_status.setText("Disconnected")
             self.lbl_status.setStyleSheet("color: red;")
 
         def set_bank_state(self, bank: int, state: str) -> None:
+            """Update one bank label when a fresh outlet state is available."""
             if bank in self.bank_labels:
                 self.bank_labels[bank].setText(state)
 
         def set_power_status(self, status: str) -> None:
+            """Display the latest reported mains power status."""
             self.lbl_power.setText(status)
 
         def set_battery_level(self, level: int) -> None:
+            """Display the latest reported battery percentage."""
             self.lbl_battery.setText(f"{level}%")
 
     class SerialSettingsPanel(QWidget):
@@ -256,6 +270,7 @@ if _PYSIDE6_AVAILABLE:
         disconnect_requested = Signal()
 
         def __init__(self, parent: Optional[QWidget] = None) -> None:
+            """Build the serial-port selector and connection buttons."""
             super().__init__(parent)
             layout = QVBoxLayout(self)
 
@@ -308,6 +323,7 @@ if _PYSIDE6_AVAILABLE:
             self._refresh_ports()
 
         def _refresh_ports(self) -> None:
+            """Reload the port list while preserving the current typed selection."""
             current_port = self.current_port()
             self.combo_port.clear()
             try:
@@ -323,6 +339,7 @@ if _PYSIDE6_AVAILABLE:
                 logger.info("Previously selected port is no longer available: %s", current_port)
 
         def _on_connect(self) -> None:
+            """Emit a connect request for the currently selected serial port."""
             port = self.current_port()
             if port:
                 self.connect_requested.emit(port)
@@ -330,9 +347,11 @@ if _PYSIDE6_AVAILABLE:
                 logger.warning("Connect requested without a selected serial port")
 
         def _on_disconnect(self) -> None:
+            """Emit a request to close the active serial connection."""
             self.disconnect_requested.emit()
 
         def current_port(self) -> str:
+            """Return the effective port value from the editable combo box."""
             text_port = str(self.combo_port.currentText()).split(" —")[0].strip()
             # Editable combo boxes can have typed text even when no list items exist.
             if self.combo_port.count() == 0:
@@ -344,6 +363,7 @@ if _PYSIDE6_AVAILABLE:
             return str(port).strip()
 
         def available_ports(self) -> set[str]:
+            """Return the set of concrete port identifiers listed in the combo box."""
             ports: set[str] = set()
             for i in range(self.combo_port.count()):
                 data = self.combo_port.itemData(i)
@@ -352,6 +372,7 @@ if _PYSIDE6_AVAILABLE:
             return ports
 
         def set_current_port(self, port: str, *, add_if_missing: bool = True) -> bool:
+            """Select a known port or keep free-form text for a manually typed one."""
             port = port.strip()
             if not port:
                 logger.debug("Ignoring empty serial port selection")
@@ -366,6 +387,7 @@ if _PYSIDE6_AVAILABLE:
             return False
 
         def set_connected(self, connected: bool) -> None:
+            """Toggle widgets based on whether the serial connection is active."""
             self.btn_connect.setEnabled(not connected)
             self.btn_disconnect.setEnabled(connected)
             self.combo_port.setEnabled(not connected)
@@ -379,6 +401,7 @@ if _PYSIDE6_AVAILABLE:
         command_requested = Signal(str, object)  # command_name, args
 
         def __init__(self, parent: Optional[QWidget] = None) -> None:
+            """Build manual outlet control buttons for all supported operations."""
             super().__init__(parent)
             layout = QVBoxLayout(self)
 
@@ -429,9 +452,11 @@ if _PYSIDE6_AVAILABLE:
             layout.addStretch()
 
         def _switch_bank(self, bank: int, state: str) -> None:
+            """Emit a single-bank switch request for the selected outlet bank."""
             self.command_requested.emit("switch", (bank, state))
 
         def set_enabled(self, enabled: bool) -> None:
+            """Enable or disable all manual-control buttons together."""
             self.btn_all_on.setEnabled(enabled)
             self.btn_all_off.setEnabled(enabled)
             for btns in self.bank_buttons.values():
@@ -444,6 +469,7 @@ if _PYSIDE6_AVAILABLE:
         def __init__(
             self, label: str, sound_label: str, parent: Optional[QWidget] = None
         ) -> None:
+            """Build shared sound and bank-delay editors for one named sequence."""
             super().__init__(parent)
             self._label = label
             layout = QVBoxLayout(self)
@@ -509,6 +535,7 @@ if _PYSIDE6_AVAILABLE:
             layout.addStretch()
 
         def _path_row(self, edit: QLineEdit, accessible_name: str) -> QWidget:
+            """Create a file-path row with an attached browse button."""
             row = QWidget()
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(0, 0, 0, 0)
@@ -522,6 +549,7 @@ if _PYSIDE6_AVAILABLE:
             return row
 
         def _browse_sound(self, edit: QLineEdit) -> None:
+            """Prompt for a WAV file and copy the chosen path into the target field."""
             path, _ = QFileDialog.getOpenFileName(
                 self, "Select Sound File", "", "WAV Files (*.wav);;All Files (*)"
             )
@@ -529,9 +557,11 @@ if _PYSIDE6_AVAILABLE:
                 edit.setText(path)
 
         def get_sound(self) -> str:
+            """Return the trimmed sound path currently shown in the editor."""
             return str(self.edit_sound.text()).strip()
 
         def set_sound(self, sound: str) -> None:
+            """Populate the sound-path field from configuration data."""
             self.edit_sound.setText(sound)
 
         def get_sequence_config(self) -> SequenceConfig:
@@ -570,18 +600,21 @@ if _PYSIDE6_AVAILABLE:
         """Editor for the boot sequence (banks 1→4)."""
 
         def __init__(self, parent: Optional[QWidget] = None) -> None:
+            """Configure the shared editor with boot-sequence labels."""
             super().__init__("Boot", "Event Start Sound", parent)
 
     class ShutdownSequenceEditor(_SequenceEditorPanel):
         """Editor for the shutdown sequence (banks 4→1)."""
 
         def __init__(self, parent: Optional[QWidget] = None) -> None:
+            """Configure the shared editor with shutdown-sequence labels."""
             super().__init__("Shutdown", "Event End Sound", parent)
 
     class ServicePanel(QWidget):
         """Windows service management controls."""
 
         def __init__(self, parent: Optional[QWidget] = None) -> None:
+            """Build service status and management buttons for Windows deployments."""
             super().__init__(parent)
             layout = QVBoxLayout(self)
 
@@ -643,6 +676,7 @@ if _PYSIDE6_AVAILABLE:
             layout.addStretch()
 
         def _refresh_status(self) -> None:
+            """Refresh the displayed Windows service status string."""
             try:
                 from juicer.service import service_status
 
@@ -652,6 +686,7 @@ if _PYSIDE6_AVAILABLE:
                 self.lbl_status.setText(f"N/A ({exc})")
 
         def _install(self) -> None:
+            """Install the Windows service and refresh the on-screen status."""
             try:
                 from juicer.service import install_service
 
@@ -662,6 +697,7 @@ if _PYSIDE6_AVAILABLE:
                 QMessageBox.warning(self, "Error", f"Install failed: {exc}")
 
         def _uninstall(self) -> None:
+            """Uninstall the Windows service and refresh the on-screen status."""
             try:
                 from juicer.service import uninstall_service
 
@@ -672,6 +708,7 @@ if _PYSIDE6_AVAILABLE:
                 QMessageBox.warning(self, "Error", f"Uninstall failed: {exc}")
 
         def _start(self) -> None:
+            """Start the Windows service and refresh the on-screen status."""
             try:
                 from juicer.service import start_service
 
@@ -682,6 +719,7 @@ if _PYSIDE6_AVAILABLE:
                 QMessageBox.warning(self, "Error", f"Start failed: {exc}")
 
         def _stop(self) -> None:
+            """Stop the Windows service and refresh the on-screen status."""
             try:
                 from juicer.service import stop_service
 
@@ -697,6 +735,7 @@ if _PYSIDE6_AVAILABLE:
         config_imported = Signal(object)  # GlobalConfig
 
         def __init__(self, parent: Optional[QWidget] = None) -> None:
+            """Build file-picking controls for exporting and importing settings."""
             super().__init__(parent)
             layout = QVBoxLayout(self)
 
@@ -731,9 +770,11 @@ if _PYSIDE6_AVAILABLE:
             self.current_config_provider: Callable[[], GlobalConfig] | None = None
 
         def set_config(self, config: GlobalConfig) -> None:
+            """Remember the most recently applied configuration for later export."""
             self._current_config = config
 
         def _export(self) -> None:
+            """Write the current GUI configuration to a user-chosen TOML file."""
             try:
                 config = (
                     self.current_config_provider()
@@ -758,6 +799,7 @@ if _PYSIDE6_AVAILABLE:
                     QMessageBox.warning(self, "Error", f"Export failed: {exc}")
 
         def _import(self) -> None:
+            """Load configuration from a TOML file and emit it for application."""
             path, _ = QFileDialog.getOpenFileName(
                 self, "Import Configuration", "", "TOML Files (*.toml);;All Files (*)"
             )
@@ -779,6 +821,7 @@ if _PYSIDE6_AVAILABLE:
         """Scrolling log message display."""
 
         def __init__(self, parent: Optional[QWidget] = None) -> None:
+            """Build the read-only log pane and its clear button."""
             super().__init__(parent)
             layout = QVBoxLayout(self)
 
@@ -801,6 +844,7 @@ if _PYSIDE6_AVAILABLE:
 
         @Slot(str)
         def append_message(self, message: str) -> None:
+            """Append one log line and keep the newest message visible."""
             self.text_log.append(message)
             # Auto-scroll to bottom
             sb = self.text_log.verticalScrollBar()
@@ -808,6 +852,7 @@ if _PYSIDE6_AVAILABLE:
                 sb.setValue(sb.maximum())
 
         def _clear(self) -> None:
+            """Remove all currently displayed log lines."""
             self.text_log.clear()
 
     class DeviceStatusPanel(QWidget):
@@ -816,6 +861,7 @@ if _PYSIDE6_AVAILABLE:
         refresh_requested = Signal()
 
         def __init__(self, parent: Optional[QWidget] = None) -> None:
+            """Build labels for the extended device status queries."""
             super().__init__(parent)
             layout = QVBoxLayout(self)
 
@@ -848,9 +894,11 @@ if _PYSIDE6_AVAILABLE:
             layout.addStretch()
 
         def set_enabled(self, enabled: bool) -> None:
+            """Enable or disable the refresh button based on connection state."""
             self.btn_refresh.setEnabled(enabled)
 
         def apply_status(self, status: dict[str, str]) -> None:
+            """Copy collected status strings into the visible label set."""
             for key, value in status.items():
                 if key in self.labels:
                     self.labels[key].setText(value)
@@ -863,6 +911,7 @@ if _PYSIDE6_AVAILABLE:
         reset_requested = Signal()
 
         def __init__(self, parent: Optional[QWidget] = None) -> None:
+            """Build editable widgets for every protocol-backed device setting."""
             super().__init__(parent)
             layout = QVBoxLayout(self)
 
@@ -931,6 +980,7 @@ if _PYSIDE6_AVAILABLE:
             layout.addStretch()
 
         def _combo(self, values: list[str], accessible_name: str) -> QComboBox:
+            """Create a populated combo box for a device configuration field."""
             combo = QComboBox()
             combo.setAccessibleName(accessible_name)
             _set_help(combo, f"Select the {accessible_name.lower()} setting.")
@@ -939,9 +989,11 @@ if _PYSIDE6_AVAILABLE:
             return combo
 
         def _emit_apply(self) -> None:
+            """Emit the current widget values for application to the UPS."""
             self.apply_requested.emit(self.current_values())
 
         def set_enabled(self, enabled: bool) -> None:
+            """Enable or disable all configuration widgets together."""
             for widget in (
                 self.combo_buzzer,
                 self.combo_avr,
@@ -960,6 +1012,7 @@ if _PYSIDE6_AVAILABLE:
                 widget.setEnabled(enabled)
 
         def current_values(self) -> dict[str, object]:
+            """Collect current widget values into a transport-friendly mapping."""
             return {
                 "buzzer": self.combo_buzzer.currentData(),
                 "avr": self.combo_avr.currentData(),
@@ -974,6 +1027,7 @@ if _PYSIDE6_AVAILABLE:
             }
 
         def apply_values(self, values: dict[str, object]) -> None:
+            """Populate widgets from device-derived configuration values."""
             mapping = {
                 "buzzer": self.combo_buzzer,
                 "avr": self.combo_avr,
@@ -1003,6 +1057,7 @@ if _PYSIDE6_AVAILABLE:
         """Main application window with tabbed interface."""
 
         def __init__(self) -> None:
+            """Create panels, wire their signals, and load persisted configuration."""
             super().__init__()
             self.setWindowTitle("Juicer — Furman F1500-UPS E Controller")
             self._resize_to_content_on_show = True
@@ -1230,6 +1285,7 @@ if _PYSIDE6_AVAILABLE:
             self._connect_serial(port)
 
         def _set_busy(self, busy: bool) -> None:
+            """Synchronize busy-state enablement across connection-dependent widgets."""
             self._busy = busy
             connected = self._client is not None
             self.serial_settings.setEnabled(not busy)
@@ -1264,6 +1320,7 @@ if _PYSIDE6_AVAILABLE:
             worker.moveToThread(thread)
 
             def cleanup() -> None:
+                """Tear down worker objects after either completion callback fires."""
                 self._set_busy(False)
                 self._workers = [
                     pair
@@ -1284,6 +1341,7 @@ if _PYSIDE6_AVAILABLE:
             thread.start()
 
         def _collect_status(self, client: Any) -> dict[str, str]:
+            """Gather best-effort status text for every overview and status-panel field."""
             status: dict[str, str] = {}
             try:
                 identity = client.query_id()
@@ -1344,6 +1402,7 @@ if _PYSIDE6_AVAILABLE:
             return status
 
         def _apply_status_result(self, status: dict[str, str]) -> None:
+            """Apply a collected status snapshot to the overview and detail panels."""
             for bank in range(1, NUM_BANKS + 1):
                 value = status.get(f"bank{bank}")
                 if value is not None:
@@ -1363,6 +1422,7 @@ if _PYSIDE6_AVAILABLE:
             from juicer.protocol import JuicerClient, SerialTransport
 
             def connect() -> object:
+                """Perform blocking serial connection setup in a worker thread."""
                 transport = SerialTransport(port=port)
                 transport.open()
                 client = JuicerClient(transport)
@@ -1370,6 +1430,7 @@ if _PYSIDE6_AVAILABLE:
                 return transport, client, status
 
             def success(result: object) -> None:
+                """Persist the live client objects and update the UI after connection."""
                 transport, client, status = cast(tuple[Any, Any, dict[str, str]], result)
                 self._transport = transport
                 self._client = client
@@ -1384,6 +1445,7 @@ if _PYSIDE6_AVAILABLE:
                 self._apply_status_result(status)
 
             def error(message: str) -> None:
+                """Report a connection failure raised by the worker thread."""
                 logger.error("Connection failed: %s", message)
                 self.status_bar.showMessage("Connection failed")
                 QMessageBox.warning(self, "Connection Error", message)
@@ -1416,14 +1478,17 @@ if _PYSIDE6_AVAILABLE:
                 return
 
             def query() -> object:
+                """Fetch a fresh status snapshot using the active client."""
                 return self._collect_status(self._client)
 
             def success(result: object) -> None:
+                """Update status widgets after a successful refresh."""
                 status = cast(dict[str, str], result)
                 self._apply_status_result(status)
                 self.status_bar.showMessage("Status refreshed")
 
             def error(message: str) -> None:
+                """Surface refresh failures without dropping the active connection."""
                 logger.warning("Could not refresh status: %s", message)
                 self.status_bar.showMessage("Status refresh failed")
                 QMessageBox.warning(self, "Status Error", message)
@@ -1438,6 +1503,7 @@ if _PYSIDE6_AVAILABLE:
                 return
 
             def execute() -> object:
+                """Send the requested manual command and then reload device status."""
                 if command == "all_on":
                     responses = self._client.all_on()
                     logger.info("ALL ON: %s", responses)
@@ -1453,10 +1519,12 @@ if _PYSIDE6_AVAILABLE:
                 return self._collect_status(self._client)
 
             def success(result: object) -> None:
+                """Refresh visible state after a manual command succeeds."""
                 self._apply_status_result(cast(dict[str, str], result))
                 self.status_bar.showMessage(f"Command sent: {command}")
 
             def error(message: str) -> None:
+                """Display a manual command failure raised by the worker thread."""
                 logger.error("Command failed: %s", message)
                 self.status_bar.showMessage("Command failed")
                 QMessageBox.warning(self, "Command Error", message)
@@ -1465,11 +1533,13 @@ if _PYSIDE6_AVAILABLE:
 
         @Slot()
         def _load_device_config(self) -> None:
+            """Load configurable device settings from the connected UPS."""
             if not self._client:
                 QMessageBox.warning(self, "Error", "Not connected to serial port")
                 return
 
             def load() -> object:
+                """Query the UPS and normalize the response for the config panel."""
                 cfg = self._client.query_list_config()
                 values: dict[str, object] = {
                     "buzzer": cfg.buzzer.value if cfg.buzzer else None,
@@ -1487,10 +1557,12 @@ if _PYSIDE6_AVAILABLE:
                 return values
 
             def success(result: object) -> None:
+                """Populate device config widgets after a successful query."""
                 self.device_config.apply_values(cast(dict[str, object], result))
                 self.status_bar.showMessage("Device configuration loaded")
 
             def error(message: str) -> None:
+                """Report a device configuration load failure."""
                 logger.error("Device config load failed: %s", message)
                 QMessageBox.warning(self, "Device Config", f"Load failed: {message}")
 
@@ -1498,12 +1570,14 @@ if _PYSIDE6_AVAILABLE:
 
         @Slot(object)
         def _apply_device_config(self, values_obj: object) -> None:
+            """Push edited device configuration values to the connected UPS."""
             if not self._client:
                 QMessageBox.warning(self, "Error", "Not connected to serial port")
                 return
             values = cast(dict[str, object], values_obj)
 
             def apply() -> object:
+                """Send each config-setting command and then reload status text."""
                 self._client.set_buzzer(cast(str, values["buzzer"]))
                 self._client.set_avr(cast(str, values["avr"]))
                 self._client.set_feedback(cast(str, values["feedback"]))
@@ -1517,10 +1591,12 @@ if _PYSIDE6_AVAILABLE:
                 return self._collect_status(self._client)
 
             def success(result: object) -> None:
+                """Refresh status panels after device settings are applied."""
                 self._apply_status_result(cast(dict[str, str], result))
                 self.status_bar.showMessage("Device configuration applied")
 
             def error(message: str) -> None:
+                """Report a failure while applying configuration to the UPS."""
                 logger.error("Device config apply failed: %s", message)
                 QMessageBox.warning(self, "Device Config", f"Apply failed: {message}")
 
@@ -1528,6 +1604,7 @@ if _PYSIDE6_AVAILABLE:
 
         @Slot()
         def _reset_device_config(self) -> None:
+            """Request a factory reset of device-side configuration after confirmation."""
             if not self._client:
                 QMessageBox.warning(self, "Error", "Not connected to serial port")
                 return
@@ -1542,14 +1619,17 @@ if _PYSIDE6_AVAILABLE:
                 return
 
             def reset() -> object:
+                """Issue the factory reset command and then collect fresh status."""
                 self._client.reset_all()
                 return self._collect_status(self._client)
 
             def success(result: object) -> None:
+                """Refresh status panels after a successful factory reset."""
                 self._apply_status_result(cast(dict[str, str], result))
                 self.status_bar.showMessage("Device reset complete")
 
             def error(message: str) -> None:
+                """Report a factory reset failure raised by the worker thread."""
                 logger.error("Device reset failed: %s", message)
                 QMessageBox.warning(self, "Device Config", f"Reset failed: {message}")
 

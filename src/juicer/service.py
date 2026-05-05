@@ -76,6 +76,7 @@ else:
 
 
 def _ensure_pywin32() -> None:
+    """Raise a descriptive error when pywin32-backed service features are unavailable."""
     if not _PYWIN32_AVAILABLE:
         raise OSError(
             "pywin32 is required for service operations. "
@@ -194,9 +195,11 @@ class _Win32CancelToken:
     """Cancellation token backed by a Win32 event handle."""
 
     def __init__(self, event: object) -> None:
+        """Wrap the raw Win32 event handle used by the service lifecycle."""
         self._event = event
 
     def is_set(self) -> bool:
+        """Return whether the wrapped stop event has been signalled."""
         _ensure_pywin32()
         return cast(bool, win32event.WaitForSingleObject(self._event, 0) == 0)
 
@@ -265,6 +268,7 @@ if _PYWIN32_AVAILABLE:
         _svc_deps_ = SERVICE_DEPS
 
         def __init__(self, args: list[str]) -> None:
+            """Create the service instance and allocate its stop event handle."""
             win32serviceutil.ServiceFramework.__init__(self, args)
             self.stop_event = win32event.CreateEvent(None, True, False, None)
             self._shutdown_done = False
@@ -351,6 +355,7 @@ else:
         _svc_display_name_ = SERVICE_DISPLAY_NAME
 
         def __init__(self, *args: object, **kwargs: object) -> None:
+            """Fail fast on non-Windows platforms where the real service cannot run."""
             raise OSError("JuicerService requires Windows + pywin32")
 
 
@@ -476,6 +481,7 @@ def run_debug() -> None:
 
 
 def _run_service_command_without_elevation(command: str) -> None:
+    """Dispatch a validated service command without triggering another UAC prompt."""
     if command not in _SERVICE_COMMANDS:
         raise SystemExit(f"Unsupported service command: {command}")
     service_command = cast(ServiceCommand, command)

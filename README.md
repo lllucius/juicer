@@ -1,28 +1,59 @@
 # Juicer
 
-**Python controller for the Furman F1500-UPS E** — a rack-mounted UPS with four
-individually-switched outlet banks controlled over RS-232.
+**Juicer** is a Python controller for the **Furman F1500-UPS E**, a rack-mounted
+UPS with four individually switched outlet banks that are controlled over
+RS-232.
 
-Juicer provides:
+The repository contains:
 
-- A **CLI** (`juicer`) for scripting and one-shot commands.
-- A **GUI** (`juicer-gui`) built with PySide6 for interactive control.
-- A **Windows service** that runs the configured boot/shutdown sequences
-  automatically on system start and stop.
-- A **configuration system** that stores settings in a portable TOML file.
+- a **CLI** for one-shot control and scripting,
+- a **GUI** for interactive operation and configuration,
+- a **Windows service** that runs configured boot and shutdown sequences, and
+- a complete **protocol/configuration/test suite** that can be developed without
+  a physical UPS attached.
+
+The project is intentionally split so that protocol parsing, command building,
+configuration serialization, and sequence execution remain testable in
+isolation. Actual hardware access is limited to the serial transport layer.
 
 ---
 
 ## Table of Contents
 
-1. [Requirements](#requirements)
-2. [Installation](#installation)
-3. [CLI Usage](#cli-usage)
-4. [GUI Usage](#gui-usage)
-5. [Configuration](#configuration)
-6. [Windows Service](#windows-service)
-7. [Development](#development)
-8. [License](#license)
+1. [What Juicer Does](#what-juicer-does)
+2. [Requirements](#requirements)
+3. [Repository Tour](#repository-tour)
+4. [Installation](#installation)
+5. [CLI Reference](#cli-reference)
+6. [GUI Reference](#gui-reference)
+7. [Configuration](#configuration)
+8. [Sequence Execution Model](#sequence-execution-model)
+9. [Windows Service](#windows-service)
+10. [Protocol and Device Model](#protocol-and-device-model)
+11. [Development](#development)
+12. [Troubleshooting](#troubleshooting)
+13. [License](#license)
+
+---
+
+## What Juicer Does
+
+Juicer is built around the operating model of the Furman unit:
+
+- The UPS exposes **four controllable outlet banks**.
+- Commands and queries are sent as **CR-terminated ASCII strings** over a serial
+  connection.
+- Device state includes outlet status, battery state, mains state, power/load
+  measurements, and several user-configurable settings.
+- Boot and shutdown behavior is usually a **timed sequence** rather than a
+  single command, because downstream equipment often needs controlled delays.
+
+Juicer therefore provides four major workflows:
+
+1. **Manual control** of outlets and device settings.
+2. **Status inspection** for outlet, power, and battery information.
+3. **Persistent configuration** in TOML for repeatable operation.
+4. **Automated startup/shutdown orchestration** through the Windows service.
 
 ---
 
@@ -30,209 +61,421 @@ Juicer provides:
 
 | Requirement | Version |
 |-------------|---------|
-| Python      | ≥ 3.11  |
-| click       | ≥ 8.1   |
-| pydantic    | ≥ 2.0   |
-| pyserial    | ≥ 3.5   |
-| PySide6 *(GUI extra only)* | ≥ 6.6 |
-| pywin32 *(Windows service only)* | ≥ 306 |
+| Python | >= 3.11 |
+| click | >= 8.1 |
+| pydantic | >= 2.0 |
+| pyserial | >= 3.5 |
+| PySide6 *(GUI extra only)* | >= 6.6 |
+| pywin32 *(Windows service only)* | >= 306 |
 
-A Furman F1500-UPS E connected via a null-modem RS-232 cable is required for
-actual device control. All protocol logic works without hardware — you can
-build and test the software on any OS.
+A Furman F1500-UPS E connected with a null-modem RS-232 cable is required for
+real device control. The codebase, however, is structured so that protocol
+logic, config serialization, and sequence behavior can all be developed and
+tested without hardware.
+
+---
+
+## Repository Tour
+
+### Top-level layout
+
+```text
+juicer/
+├── src/juicer/
+│   ├── __init__.py
+│   ├── __main__.py
+│   ├── cli.py
+│   ├── config.py
+│   ├── gui.py
+│   ├── protocol.py
+│   ├── sequence.py
+│   └── service.py
+├── tests/
+├── firmware/
+├── scripts/
+├── manual.pdf
+├── manual.txt
+├── pyproject.toml
+├── requirements.txt
+├── requirements-dev.txt
+└── README.md
+```
+
+### Source modules
+
+#### `src/juicer/protocol.py`
+
+Implements the Furman serial protocol:
+
+- typed enums for protocol values,
+- command builder functions,
+- line parsing,
+- serial and fake transports, and
+- `JuicerClient`, the high-level blocking client API.
+
+This is the most protocol-dense module in the repository and is written so the
+transport layer can be swapped out in tests.
+
+#### `src/juicer/config.py`
+
+Defines the persistent TOML-backed configuration model:
+
+- `GlobalConfig` for top-level settings,
+- `SequenceConfig` and `BankConfig` for boot/shutdown behavior,
+- `TomlStore` for load/save operations, and
+- serialization helpers that preserve Juicer's explicit TOML layout.
+
+#### `src/juicer/sequence.py`
+
+Runs boot and shutdown sequences using:
+
+- a configured bank order,
+- optional start/stop sounds,
+- injected sleeper/cancellation/progress callbacks, and
+- a minimal switch-capable client protocol.
+
+The sequence runner is independent of the GUI and Windows service so both can
+reuse the same orchestration logic.
+
+#### `src/juicer/cli.py`
+
+Defines the `juicer` Click application. It exposes commands for:
+
+- serial port discovery,
+- outlet status and switching,
+- sequence execution,
+- config import/export, and
+- Windows service management.
+
+#### `src/juicer/gui.py`
+
+Provides the full PySide6 desktop application. The GUI is intentionally built
+on top of the same `config`, `protocol`, `sequence`, and `service` modules used
+elsewhere rather than duplicating serial logic inside the interface.
+
+Notable design choices:
+
+- blocking serial work is moved off the main thread through short-lived worker
+  threads,
+- controls are heavily labeled for accessibility,
+- the current configuration is loaded on startup and saved on exit, and
+- the GUI reflects device state by re-querying the UPS after commands.
+
+#### `src/juicer/service.py`
+
+Wraps pywin32 service functionality and mirrors the original service lifecycle:
+
+- run the configured **boot** sequence during service start,
+- keep startup synchronous until boot completes,
+- wait for stop/shutdown events,
+- run the configured **shutdown** sequence during stop/shutdown.
+
+The module is importable on non-Windows systems; Windows-only actions fail at
+runtime with descriptive errors instead of breaking imports.
+
+### Tests
+
+The tests are grouped by behavior:
+
+- `tests/test_protocol.py` verifies command builders, response parsing, and
+  transport/client behavior.
+- `tests/test_sequence.py` verifies sequence ordering, delays, and progress
+  reporting.
+- `tests/test_service.py` verifies service lifecycle behavior and Windows
+  service helper logic using mocked pywin32 components.
+
+### Firmware and manual references
+
+- `manual.pdf` / `manual.txt` contain the Furman device manual used as the
+  protocol reference.
+- `firmware/` contains emulator-related material that helps validate protocol
+  assumptions without real hardware.
 
 ---
 
 ## Installation
 
-Juicer can be installed from source with [uv](https://docs.astral.sh/uv/), which
-creates a local virtual environment and installs the package plus its
-dependencies. The PowerShell installer bootstraps uv automatically when uv is
-not already available.
+Juicer is designed to install cleanly from source.
 
-### From source with uv
+### Recommended: install with `uv`
 
 ```bash
-# Clone the repository
 git clone https://github.com/lllucius/juicer.git
 cd juicer
 
-# Create .venv and install the CLI/runtime package
+# Runtime package
 ./scripts/install-uv.sh
 
-# Optional GUI support
+# Runtime package + GUI dependencies
 ./scripts/install-uv.sh --gui
 
-# PowerShell: automatically install uv if needed and include Windows-specific dependencies
-pwsh -File scripts/install-uv.ps1 -Windows
-```
+# Developer install
+./scripts/install-uv.sh --dev
 
-Activate the environment before running Juicer:
-
-```bash
-source .venv/bin/activate
-juicer --help
+# Developer install with GUI
+./scripts/install-uv.sh --dev --gui
 ```
 
 On Windows PowerShell:
 
 ```powershell
-.venv\Scripts\Activate.ps1
-juicer --help
+pwsh -File scripts/install-uv.ps1 -Windows
+pwsh -File scripts/install-uv.ps1 -Dev -Windows
 ```
 
-If PowerShell blocks the local installer script after cloning or downloading the
-repository, unblock that script once before running it:
+If PowerShell blocks the installer after download or clone:
 
 ```powershell
 Unblock-File scripts/install-uv.ps1
 ```
 
-### Manual uv install
+### Manual `uv` workflow
 
 ```bash
 uv venv
 uv pip install --python .venv/bin/python .
-
-# Optional extras:
 uv pip install --python .venv/bin/python ".[gui]"
 uv pip install --python .venv/bin/python ".[windows]"
+uv pip install --python .venv/bin/python ".[dev]"
 ```
 
-On Windows, use `.venv\Scripts\python.exe` as the `--python` path.
+On Windows, use `.venv\Scripts\python.exe` in the `--python` argument.
 
-### Editable / developer install with uv
+### Activate the environment
+
+POSIX shells:
 
 ```bash
-./scripts/install-uv.sh --dev
-# With GUI support:
-./scripts/install-uv.sh --dev --gui
-# Windows:
-pwsh -File scripts/install-uv.ps1 -Dev -Windows
+source .venv/bin/activate
+```
+
+Windows PowerShell:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+### Smoke-test the install
+
+```bash
+juicer --help
+python -m juicer --help
+```
+
+If PySide6 is installed:
+
+```bash
+juicer-gui
 ```
 
 ---
 
-## CLI Usage
+## CLI Reference
 
-After installation the `juicer` command is available on `PATH`.
-You can also invoke it with `python -m juicer`.
+After installation, the primary command is `juicer`.
 
-### Global options
+### Global usage
 
-```
+```text
 juicer [--verbose] <command>
 juicer --version
 juicer --help
 ```
 
-### Commands
+`--verbose` enables debug logging to stderr.
 
-#### `ports` — list available serial ports
+### `juicer ports`
+
+Lists available serial ports reported by pyserial.
 
 ```bash
 juicer ports
 ```
 
-#### `status` — query device status
+Typical use:
+
+- confirm the UPS cable is visible to the OS,
+- copy the exact port identifier into config or GUI settings,
+- distinguish between multiple serial adapters.
+
+### `juicer status --port <PORT>`
+
+Queries the UPS for:
+
+- outlet bank states,
+- mains power status, and
+- battery percentage.
 
 ```bash
 juicer status --port COM3
+juicer status --port /dev/ttyUSB0
 ```
 
-Prints outlet bank states, mains power status, and battery level.
+This command is a good first validation step when bringing a new machine or
+cable online.
 
-#### `all-on` / `all-off` — bulk power control
+### `juicer all-on` / `juicer all-off`
+
+Bulk-controls all outlet banks.
 
 ```bash
-juicer all-on  --port COM3
+juicer all-on --port COM3
 juicer all-off --port COM3
 ```
 
-#### `switch` — control a single bank
+These commands print the parsed responses returned by the device and then a
+human-readable summary message.
+
+### `juicer switch --port <PORT> --bank <1-4> --state <on|off>`
+
+Controls a single outlet bank.
 
 ```bash
 juicer switch --port COM3 --bank 2 --state on
-juicer switch --port COM3 --bank 2 --state off
+juicer switch --port COM3 --bank 4 --state off
 ```
 
-Bank numbers are **1–4**.
+Bank-specific switching is particularly useful when sequenced startup is not
+required and you simply need to power-cycle one attached component.
 
-#### `boot` / `shutdown` — run configured sequences
+### `juicer boot` / `juicer shutdown`
+
+Runs the configured sequence from the persisted TOML file.
 
 ```bash
 juicer boot
 juicer shutdown
 ```
 
-Reads configuration from the TOML config file and executes the stored boot or
-shutdown sequence.
+These commands do **not** ask for a `--port` argument because the serial port is
+read from configuration.
 
-#### `config` — manage configuration
+### `juicer config`
 
-```bash
-juicer config show                   # Display current config as TOML
-juicer config export config.toml     # Export to a file
-juicer config import config.toml     # Import from a file
-```
-
-#### `service` — manage the Windows service *(Windows only)*
+Manage the persistent TOML configuration.
 
 ```bash
-juicer service install    # Install as auto-start service
-juicer service uninstall  # Remove the service
-juicer service start      # Start the service
-juicer service stop       # Stop the service
-juicer service status     # Query current status
+juicer config show
+juicer config export config.toml
+juicer config import config.toml
 ```
+
+- `show` prints the current persisted config.
+- `export` writes the current config to a chosen path.
+- `import` validates and stores config from a TOML file.
+
+### `juicer service`
+
+Windows-only service management helpers:
+
+```bash
+juicer service install
+juicer service uninstall
+juicer service start
+juicer service stop
+juicer service status
+```
+
+These operations require Windows and pywin32. Install, uninstall, start, stop,
+and restart operations may trigger UAC elevation when needed.
 
 ---
 
-## GUI Usage
+## GUI Reference
 
-Launch with:
+Launch the GUI with either of the following:
 
 ```bash
 juicer-gui
-# or
 python -m juicer.gui
 ```
 
-The GUI is organized into tabs:
+If PySide6 is not installed, the GUI entry point exits with a helpful error.
+
+### GUI tab overview
 
 | Tab | Purpose |
 |-----|---------|
-| **Overview** | Live bank states and connection status |
-| **Serial Settings** | Port selection, connect/disconnect |
-| **Manual Controls** | All-on, all-off, per-bank switches |
-| **Boot Sequence** | Per-bank action and delay configuration |
-| **Shutdown Sequence** | Same for the shutdown sequence |
-| **Service** | Install/uninstall/start/stop the Windows service |
-| **Device Status** | Detailed device identification, power, load, and battery queries |
-| **Device Config** | Device buzzer, AVR, feedback, display, threshold, and reset controls |
-| **Import/Export** | Save and load TOML configuration |
-| **Log** | Scrolling log of all events |
+| Overview | Live connection, outlet, mains, and battery summary |
+| Manual Control | All-on, all-off, and per-bank switching |
+| Boot Sequence | Edit boot bank actions and delays |
+| Shutdown Sequence | Edit shutdown bank actions and delays |
+| Device Status | Query extended device measurements and identity |
+| Device Config | Read/write device-side buzzer, AVR, feedback, display, and threshold settings |
+| Service | Install/start/stop the Windows service |
+| Import/Export | Move TOML configuration in and out of the app |
+| Log | Review application log output inside the GUI |
 
-Configuration is automatically loaded from the TOML config file on launch and
-saved when the window is closed. On Windows the default path is
-`%PROGRAMDATA%\Juicer\config.toml`; on other platforms it is
-`~/.juicer/config.toml`.
+### Startup behavior
+
+When the GUI opens it:
+
+1. loads the persisted config if one exists,
+2. populates the sequence and serial settings editors,
+3. attempts to select the saved serial port if it is currently available, and
+4. optionally auto-connects to that saved port.
+
+If the saved port is not currently present, the GUI leaves the user in a safe
+disconnected state.
+
+### Connection behavior
+
+The GUI does not perform blocking serial work on the main UI thread. Instead it
+uses short-lived worker threads for:
+
+- initial connection,
+- status refresh,
+- manual commands,
+- device config loads,
+- device config writes, and
+- factory reset.
+
+This matters because serial I/O may block, retry, or time out. Without worker
+threads, the interface would freeze while device commands were in progress.
+
+### Accessibility and discoverability
+
+The GUI includes:
+
+- accessible names for controls,
+- tooltip/status-tip help text,
+- explicit labels and label buddies where relevant, and
+- a log view that surfaces internal actions and failures.
+
+This is intentional: the app is meant to be operable and debuggable even when
+the user is not watching stdout/stderr.
 
 ---
 
 ## Configuration
 
-The Juicer configuration describes:
+Juicer stores configuration as TOML through `TomlStore`.
 
-- **`port`** — serial port name (e.g. `COM3`, `/dev/ttyS0`).
-- **`event_start_sound`** / **`event_stop_sound`** — optional WAV files played
-  at the beginning and end of a sequence event (Windows only).
-- **`boot`** / **`shutdown`** — per-sequence, per-bank settings:
-  - `action`: `0` = OFF, `1` = ON, absent = skip.
-  - `pre_delay_ms`: milliseconds to wait *before* the action.
-  - `post_delay_ms`: milliseconds to wait *after* the action.
+### Default config path
 
-### TOML example
+- **Windows**: `%PROGRAMDATA%\Juicer\config.toml`
+- **Other platforms**: `~/.juicer/config.toml`
+
+### Top-level fields
+
+- `port`: serial port name such as `COM3` or `/dev/ttyUSB0`
+- `event_start_sound`: optional WAV file played before a sequence starts
+- `event_stop_sound`: optional WAV file played after a sequence ends
+- `boot`: boot sequence configuration
+- `shutdown`: shutdown sequence configuration
+
+### Per-bank fields
+
+Each sequence has four bank entries:
+
+- `action`
+  - `0` = turn the bank OFF
+  - `1` = turn the bank ON
+  - omitted = skip the bank entirely
+- `pre_delay_ms`: milliseconds to wait before the action
+- `post_delay_ms`: milliseconds to wait after the action
+
+### Example configuration
 
 ```toml
 port = "COM3"
@@ -280,99 +523,249 @@ pre_delay_ms = 0
 post_delay_ms = 0
 ```
 
-Use `juicer config export config.toml` to back up settings to a portable TOML
-file, and `juicer config import config.toml` to restore them.
+### Serialization notes
+
+The config writer is intentionally explicit rather than delegating to a generic
+TOML dumping library. That keeps the generated file stable and predictable:
+
+- strings are escaped safely,
+- bank sections are always emitted in a fixed order,
+- missing actions stay omitted rather than being rewritten ambiguously.
+
+That predictability makes exported configs easier to review and compare.
+
+---
+
+## Sequence Execution Model
+
+The sequence runner in `sequence.py` is shared by the CLI and Windows service.
+
+### Bank order
+
+- **Boot order**: `1 -> 2 -> 3 -> 4`
+- **Shutdown order**: `4 -> 3 -> 2 -> 1`
+
+### Per-bank behavior
+
+For each bank:
+
+1. skip the bank if no action is configured,
+2. wait `pre_delay_ms`,
+3. send the bank switch command,
+4. wait `post_delay_ms`.
+
+### Long delays and progress reporting
+
+Long waits are intentionally broken into chunks by `_sleep_with_progress()`.
+This is a small but important implementation detail:
+
+- the sequence still waits for the full configured delay,
+- but long waits are split into intervals,
+- and an optional progress callback runs between intervals.
+
+This allows the Windows service to keep reporting startup progress to the
+Service Control Manager during lengthy boot sequences instead of appearing hung.
+
+### Cancellation model
+
+Sequence execution optionally accepts a cancellation token. That lets the
+service stop sequence processing cleanly when a stop request arrives during
+startup.
+
+### Sound playback
+
+Optional event sounds are only played on Windows through `winsound`. On other
+platforms the code logs that sound playback was skipped.
 
 ---
 
 ## Windows Service
 
-The Juicer Windows service (`Juicer` / *Juicer UPS Controller*) runs
-automatically at system start:
+The Windows service exists so outlet sequencing can happen automatically during
+machine lifecycle events.
 
-- **On start** — executes the boot sequence (banks 1 → 4).
-- **On stop / system shutdown** — executes the shutdown sequence (banks 4 → 1).
+### Service identity
 
-Startup remains synchronous by design: the service reports `SERVICE_RUNNING`
-only after the configured boot sequence has finished, so dependent services do
-not start before outlet power is ready. During long boot work, Juicer
-periodically refreshes `SERVICE_START_PENDING` with the Windows Service Control
-Manager.
+- **Service name**: `Juicer`
+- **Display name**: `Juicer UPS Controller`
 
-### Install and start
+### Lifecycle
 
-```bat
-juicer service install
-juicer service start
+- On service start, Juicer loads config and runs the **boot** sequence.
+- Startup remains **synchronous** until boot completes.
+- Only then does the service report `SERVICE_RUNNING`.
+- During shutdown or stop, Juicer runs the configured **shutdown** sequence.
+
+This behavior is deliberate. Many environments need downstream equipment to be
+fully powered before dependent services start.
+
+### Why startup stays synchronous
+
+This is one of the more non-obvious pieces of the codebase.
+
+If the service reported `SERVICE_RUNNING` immediately and only then started the
+boot sequence in the background, Windows and other dependent software could
+assume the UPS-controlled equipment was ready before the outlet banks had
+actually been energized. The current implementation avoids that race by keeping
+service startup pending while power-up is still in progress.
+
+### Logging
+
+The service writes per-sequence log files next to the config file:
+
+- `boot.log`
+- `shutdown.log`
+
+That makes post-mortem debugging easier on Windows systems where interactive
+stdout/stderr is not available.
+
+### Installation notes
+
+Service installation uses pywin32's native `pythonservice.exe` host. The code
+also includes a compatibility path that prefers the existing
+`site-packages/win32/pythonservice.exe` location rather than relying on pywin32
+to relocate it. This is important for Windows Store Python installs, where the
+interpreter directory may be read-only.
+
+---
+
+## Protocol and Device Model
+
+`protocol.py` implements a typed wrapper around the UPS serial protocol.
+
+### Command style
+
+Commands are emitted as ASCII with a trailing carriage return:
+
+```text
+!ALL_ON\r
+!SWITCH 2 OFF\r
+?OUTLETSTAT\r
 ```
 
-> **Note**: service install, uninstall, start, and stop operations require
-> **Administrator** privileges. On Windows, the CLI and GUI request elevation
-> automatically when needed.
->
-> The service runs under the installed Python environment through pywin32's
-> native `pythonservice.exe` host. Keep Python, pywin32, and Juicer installed on
-> the target machine after service installation.
+### Line termination
+
+Response lines are fundamentally **CR-terminated**. A trailing LF may appear
+depending on the device's linefeed setting, so the serial transport strips an
+optional LF after each CR.
+
+This subtle behavior is important enough to be called out because the
+transport's `read_line()` implementation intentionally preserves the first byte
+of the next response if the byte after CR is **not** LF. That prevents line
+boundary corruption when the device sends CR-only responses back-to-back.
+
+### High-level client behavior
+
+`JuicerClient` offers blocking methods that:
+
+1. build the correct protocol string,
+2. write it through the configured transport,
+3. read the expected number or shape of responses,
+4. parse those lines into typed models, and
+5. raise protocol-specific errors when the response is missing or invalid.
+
+### Fake transport
+
+The in-memory `FakeTransport` exists so tests can queue expected response lines
+without opening a real serial device. This is a key reason the protocol module
+has high test coverage and remains safe to refactor.
 
 ---
 
 ## Development
 
-### Project layout
+### Local development install
 
+```bash
+python -m pip install -r requirements-dev.txt
 ```
-juicer/
-├── src/
-│   └── juicer/
-│       ├── __init__.py     # Package version
-│       ├── __main__.py     # python -m juicer entry point
-│       ├── cli.py          # Click CLI
-│       ├── config.py       # Pydantic models + TOML store
-│       ├── gui.py          # PySide6 GUI
-│       ├── protocol.py     # Serial protocol (commands, responses, transport)
-│       ├── sequence.py     # Boot/shutdown sequencer
-│       └── service.py      # Windows service wrapper
-├── pyproject.toml
-├── requirements.txt
-├── requirements-windows.txt
-├── requirements-dev.txt
-├── scripts/
-│   ├── install-uv.sh
-│   └── install-uv.ps1
-├── LICENSE
-└── README.md
+
+Or use the `uv`-based developer install shown earlier.
+
+### Validation commands
+
+From the repository root:
+
+```bash
+python -m ruff check src tests
+python -m mypy src
+python -m pytest
 ```
 
 ### Running from source
 
 ```bash
-# After installing into .venv with uv:
-source .venv/bin/activate
-
-# CLI
 python -m juicer --help
-
-# GUI
 python -m juicer.gui
 ```
 
-### Linting
+### Design principles worth knowing
+
+#### 1. Keep hardware access isolated
+
+Only the transport layer should know about raw serial I/O details. Higher-level
+code should work with typed responses and domain concepts.
+
+#### 2. Prefer typed configuration and typed protocol values
+
+Pydantic models and enums are used heavily so invalid config or unexpected
+protocol values fail early and explicitly.
+
+#### 3. Keep sequence logic reusable
+
+The CLI, GUI, and service all rely on the same sequence runner rather than
+copying boot/shutdown rules into multiple places.
+
+#### 4. Make non-Windows imports safe
+
+Windows-specific features are guarded so the codebase can still be developed and
+tested on Linux or macOS.
+
+---
+
+## Troubleshooting
+
+### `pyserial is required`
+
+Install runtime dependencies:
 
 ```bash
-ruff check src/
+python -m pip install -r requirements.txt
 ```
 
-### Type checking
+### `PySide6 is required for the GUI`
+
+Install the GUI extra:
 
 ```bash
-mypy src/
+python -m pip install ".[gui]"
 ```
 
-### Tests
+### `pywin32 is required for service operations`
+
+Install the Windows extra on a Windows machine:
 
 ```bash
-pytest
+python -m pip install ".[windows]"
 ```
+
+### The saved port does not auto-connect
+
+The GUI only auto-connects when the saved port is currently discoverable. If the
+USB adapter name changed or the cable is unplugged, the GUI will stay
+disconnected instead of guessing.
+
+### Status queries work partially
+
+Some status queries are performed independently. If one query fails, Juicer
+still tries to populate the rest of the available information and reports the
+failed field as unavailable rather than failing the whole screen.
+
+### Service starts but dependent equipment is not ready quickly
+
+Remember that startup timing is controlled by the configured sequence delays.
+Long boot delays are expected to keep the service in `START_PENDING` until the
+configured power-up sequence has finished.
 
 ---
 
