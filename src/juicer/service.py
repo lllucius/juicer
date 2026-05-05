@@ -19,7 +19,7 @@ import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Literal, cast
+from typing import Any, Callable, Literal, cast
 
 logger = logging.getLogger(__name__)
 
@@ -88,11 +88,18 @@ ServiceCommand = Literal["install", "uninstall", "start", "stop", "restart"]
 _SERVICE_COMMANDS: frozenset[str] = frozenset(("install", "uninstall", "start", "stop", "restart"))
 
 
+def _windows_dll(name: str) -> Any | None:
+    windll = getattr(ctypes, "windll", None)
+    if windll is None:
+        return None
+    return getattr(windll, name, None)
+
+
 def _is_user_admin() -> bool:
     """Return whether the current Windows process is elevated."""
     if not _WINDOWS:
         return False
-    shell32 = getattr(getattr(ctypes, "windll", None), "shell32", None)
+    shell32 = _windows_dll("shell32")
     if shell32 is None:
         return False
     try:
@@ -106,8 +113,8 @@ def _request_elevated_service_command(command: ServiceCommand) -> None:
     if command not in _SERVICE_COMMANDS:
         raise ValueError(f"Unsupported elevated service command: {command}")
 
-    shell32 = getattr(getattr(ctypes, "windll", None), "shell32", None)
-    kernel32 = getattr(getattr(ctypes, "windll", None), "kernel32", None)
+    shell32 = _windows_dll("shell32")
+    kernel32 = _windows_dll("kernel32")
     if shell32 is None or kernel32 is None:
         raise OSError("Unable to request elevated privileges on this platform")
 
@@ -468,7 +475,7 @@ def run_debug() -> None:
 
 def _run_service_command_without_elevation(command: str) -> None:
     if command not in _SERVICE_COMMANDS:
-        raise SystemExit(f"Unsupported elevated service command: {command}")
+        raise SystemExit(f"Unsupported service command: {command}")
     service_command = cast(ServiceCommand, command)
     if service_command == "install":
         install_service(elevate=False)
