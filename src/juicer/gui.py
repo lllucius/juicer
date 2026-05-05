@@ -39,7 +39,7 @@ NUM_BANKS = 4
 
 # Guard PySide6 import for environments where it's not installed
 try:
-    from PySide6.QtCore import QObject, QThread, Signal, Slot
+    from PySide6.QtCore import QObject, Qt, QThread, Signal, Slot
     from PySide6.QtWidgets import (
         QApplication,
         QComboBox,
@@ -1161,8 +1161,8 @@ if _PYSIDE6_AVAILABLE:
                     cleanup()
 
             thread.started.connect(worker.run)
-            worker.finished.connect(on_finished)
-            worker.error.connect(on_error)
+            worker.finished.connect(on_finished, Qt.ConnectionType.QueuedConnection)
+            worker.error.connect(on_error, Qt.ConnectionType.QueuedConnection)
             self._workers.append((worker, thread))
             thread.start()
 
