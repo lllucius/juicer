@@ -138,16 +138,25 @@ def default_config_path() -> Path:
 
 
 def _quote_toml_string(value: str) -> str:
-    escaped = (
-        value.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("\b", "\\b")
-        .replace("\t", "\\t")
-        .replace("\n", "\\n")
-        .replace("\f", "\\f")
-        .replace("\r", "\\r")
-    )
-    return f'"{escaped}"'
+    """Return a TOML basic string literal for arbitrary text."""
+    escapes = {
+        "\\": "\\\\",
+        '"': '\\"',
+        "\b": "\\b",
+        "\t": "\\t",
+        "\n": "\\n",
+        "\f": "\\f",
+        "\r": "\\r",
+    }
+    chars: list[str] = []
+    for char in value:
+        if char in escapes:
+            chars.append(escapes[char])
+        elif ord(char) < 0x20:
+            chars.append(f"\\u{ord(char):04X}")
+        else:
+            chars.append(char)
+    return f'"{"".join(chars)}"'
 
 
 def _format_toml_value(value: str | int | bool) -> str:

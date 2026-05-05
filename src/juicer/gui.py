@@ -34,7 +34,7 @@ from juicer.config import (
 
 logger = logging.getLogger(__name__)
 
-MAX_DELAY_MS = 2_147_483_647
+MAX_QSPINBOX_DELAY_MS = 2_147_483_647
 NUM_BANKS = 4
 
 # Guard PySide6 import for environments where it's not installed
@@ -413,7 +413,7 @@ if _PYSIDE6_AVAILABLE:
                 row_layout.addWidget(QLabel("Delay Before:"))
                 pre_spin = QSpinBox()
                 pre_spin.setAccessibleName(f"{label} Bank {i} Pre-Delay")
-                pre_spin.setRange(0, MAX_DELAY_MS)
+                pre_spin.setRange(0, MAX_QSPINBOX_DELAY_MS)
                 pre_spin.setSuffix(" ms")
                 pre_spin.setSingleStep(100)
                 row_layout.addWidget(pre_spin)
@@ -422,7 +422,7 @@ if _PYSIDE6_AVAILABLE:
                 row_layout.addWidget(QLabel("Delay After:"))
                 post_spin = QSpinBox()
                 post_spin.setAccessibleName(f"{label} Bank {i} Post-Delay")
-                post_spin.setRange(0, MAX_DELAY_MS)
+                post_spin.setRange(0, MAX_QSPINBOX_DELAY_MS)
                 post_spin.setSuffix(" ms")
                 post_spin.setSingleStep(100)
                 row_layout.addWidget(post_spin)
@@ -685,11 +685,12 @@ if _PYSIDE6_AVAILABLE:
                     store = TomlStore(path)
                     config = store.load()
                     self.config_imported.emit(config)
-                    QMessageBox.information(
-                        self,
-                        "Import",
-                        f"Configuration imported from {path}.\nClick Save Settings to persist it.",
-                    )
+                    msg = QMessageBox(self)
+                    msg.setIcon(QMessageBox.Icon.Information)
+                    msg.setWindowTitle("Import")
+                    msg.setText(f"Configuration imported from {path}.")
+                    msg.setInformativeText("Click Save Settings to persist it.")
+                    msg.exec()
                 except Exception as exc:
                     QMessageBox.warning(self, "Error", f"Import failed: {exc}")
 
@@ -1117,6 +1118,13 @@ if _PYSIDE6_AVAILABLE:
             *,
             busy_message: str,
         ) -> None:
+            """Run a blocking device operation in a short-lived Qt worker thread.
+
+            The callable must not touch widgets. Results and errors are delivered
+            back to the main thread through Qt signals, where the supplied
+            callbacks update UI state. The worker and thread are cleaned up after
+            either signal is handled.
+            """
             if self._busy:
                 QMessageBox.information(
                     self, "Busy", "Another device operation is already running."

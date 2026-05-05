@@ -990,7 +990,12 @@ class JuicerClient:
         return self._recv_variable(min_lines=4, max_lines=6, context="!ALL_OFF")
 
     def switch(self, bank: int | BankNumber, state: str | BankState) -> list[ParsedResponse]:
-        """Send ``!SWITCH`` and collect documented status responses."""
+        """Send ``!SWITCH`` and collect protocol status lines.
+
+        Banks 1 and 2 report one bank status line. Banks 3 and 4 may also
+        report related bank/battery status lines when battery threshold rules
+        affect the requested action.
+        """
         self._send(cmd_switch(bank, state))
         first = self._expect_bank_status(bank, context="!SWITCH")
         responses: list[ParsedResponse] = [first]
