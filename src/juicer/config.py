@@ -16,6 +16,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
+NUM_BANKS = 4
+
 
 class BankAction(IntEnum):
     """Action to perform on a bank during a power sequence.
@@ -167,7 +169,7 @@ def _bank_to_toml(name: str, cfg: BankConfig) -> list[str]:
 
 def _sequence_to_toml(name: str, seq: SequenceConfig) -> list[str]:
     lines: list[str] = []
-    for bank in range(1, 5):
+    for bank in range(1, NUM_BANKS + 1):
         if lines:
             lines.append("")
         lines.extend(_bank_to_toml(f"{name}.bank{bank}", seq.bank(bank)))

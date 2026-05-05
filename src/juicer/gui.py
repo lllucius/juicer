@@ -34,6 +34,9 @@ from juicer.config import (
 
 logger = logging.getLogger(__name__)
 
+MAX_DELAY_MS = 2_147_483_647
+NUM_BANKS = 4
+
 # Guard PySide6 import for environments where it's not installed
 try:
     from PySide6.QtCore import QObject, QThread, Signal, Slot
@@ -410,7 +413,7 @@ if _PYSIDE6_AVAILABLE:
                 row_layout.addWidget(QLabel("Delay Before:"))
                 pre_spin = QSpinBox()
                 pre_spin.setAccessibleName(f"{label} Bank {i} Pre-Delay")
-                pre_spin.setRange(0, 2_147_483_647)
+                pre_spin.setRange(0, MAX_DELAY_MS)
                 pre_spin.setSuffix(" ms")
                 pre_spin.setSingleStep(100)
                 row_layout.addWidget(pre_spin)
@@ -419,7 +422,7 @@ if _PYSIDE6_AVAILABLE:
                 row_layout.addWidget(QLabel("Delay After:"))
                 post_spin = QSpinBox()
                 post_spin.setAccessibleName(f"{label} Bank {i} Post-Delay")
-                post_spin.setRange(0, 2_147_483_647)
+                post_spin.setRange(0, MAX_DELAY_MS)
                 post_spin.setSuffix(" ms")
                 post_spin.setSingleStep(100)
                 row_layout.addWidget(post_spin)
@@ -1216,13 +1219,13 @@ if _PYSIDE6_AVAILABLE:
             return status
 
         def _apply_status_result(self, status: dict[str, str]) -> None:
-            for bank in range(1, 5):
+            for bank in range(1, NUM_BANKS + 1):
                 value = status.get(f"bank{bank}")
                 if value is not None:
                     self.overview.set_bank_state(bank, value)
             if "outlets_error" in status:
                 logger.warning("Could not read outlet status: %s", status["outlets_error"])
-                for bank in range(1, 5):
+                for bank in range(1, NUM_BANKS + 1):
                     self.overview.set_bank_state(bank, "Unavailable")
             self.overview.set_power_status(status.get("power", "Unavailable"))
             battery_text = status.get("battery", "Unavailable")
