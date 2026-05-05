@@ -104,7 +104,7 @@ def _is_user_admin() -> bool:
         return False
     try:
         return bool(shell32.IsUserAnAdmin())
-    except Exception:
+    except (AttributeError, OSError, TypeError):
         return False
 
 

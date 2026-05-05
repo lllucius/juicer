@@ -298,12 +298,11 @@ def test_service_management_can_skip_elevation_request(
     def install_service(**kwargs: object) -> None:
         installed_kwargs.update(kwargs)
 
+    def fail_elevation(command: str) -> None:
+        raise AssertionError("unexpected elevation request")
+
     monkeypatch.setattr(service_module, "_is_user_admin", lambda: False)
-    monkeypatch.setattr(
-        service_module,
-        "_request_elevated_service_command",
-        lambda command: (_ for _ in ()).throw(AssertionError("unexpected elevation request")),
-    )
+    monkeypatch.setattr(service_module, "_request_elevated_service_command", fail_elevation)
     monkeypatch.setattr(service_module.win32serviceutil, "InstallService", install_service)
 
     service_module.install_service(elevate=False)
