@@ -110,7 +110,6 @@ class TomlStore(ConfigStore):
             prefix=f".{self.path.name}.",
             suffix=".tmp",
             dir=self.path.parent,
-            text=True,
         )
         tmp_path = Path(tmp_name)
         try:

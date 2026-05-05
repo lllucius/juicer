@@ -1461,7 +1461,7 @@ def main() -> None:
     if not _PYSIDE6_AVAILABLE:
         if platform.system() == "Windows":
             try:
-                user32 = getattr(ctypes, "windll").user32
+                user32 = ctypes.windll.user32  # type: ignore[attr-defined]
                 user32.MessageBoxW(
                     None,
                     "PySide6 is required for the GUI: pip install PySide6",
