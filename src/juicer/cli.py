@@ -6,14 +6,12 @@ Entry point: ``juicer`` (or ``python -m juicer``).
 from __future__ import annotations
 
 import logging
-import platform as plat
 import sys
-from pathlib import Path
 
 import click
 
 from juicer import __version__
-from juicer.config import ConfigStore, JsonStore, WindowsRegistryStore
+from juicer.config import ConfigStore, TomlStore, dump_config_toml
 
 logger = logging.getLogger("juicer")
 
@@ -182,11 +180,8 @@ def switch(port: str, bank: int, state: str) -> None:
 
 
 def _get_config_store() -> ConfigStore:
-    """Get the appropriate config store for the current platform."""
-    if plat.system() == "Windows":
-        return WindowsRegistryStore()
-    json_path = Path.home() / ".juicer" / "config.json"
-    return JsonStore(json_path)
+    """Get the config store."""
+    return TomlStore()
 
 
 @main.command()
@@ -249,7 +244,7 @@ def config_show() -> None:
     try:
         store = _get_config_store()
         cfg = store.load()
-        click.echo(cfg.model_dump_json(indent=2))
+        click.echo(dump_config_toml(cfg), nl=False)
     except FileNotFoundError as exc:
         raise click.ClickException("No configuration found.") from exc
     except Exception as exc:
@@ -259,13 +254,13 @@ def config_show() -> None:
 @config.command("export")
 @click.argument("file", type=click.Path())
 def config_export(file: str) -> None:
-    """Export configuration to a JSON file."""
-    from juicer.config import JsonStore
+    """Export configuration to a TOML file."""
+    from juicer.config import TomlStore
 
     try:
         store = _get_config_store()
         cfg = store.load()
-        export_store = JsonStore(file)
+        export_store = TomlStore(file)
         export_store.save(cfg)
         click.echo(f"Configuration exported to {file}")
     except Exception as exc:
@@ -275,11 +270,11 @@ def config_export(file: str) -> None:
 @config.command("import")
 @click.argument("file", type=click.Path(exists=True))
 def config_import(file: str) -> None:
-    """Import configuration from a JSON file."""
-    from juicer.config import JsonStore
+    """Import configuration from a TOML file."""
+    from juicer.config import TomlStore
 
     try:
-        import_store = JsonStore(file)
+        import_store = TomlStore(file)
         cfg = import_store.load()
         target_store = _get_config_store()
         target_store.save(cfg)

@@ -103,8 +103,8 @@ def run_sequence(
     bank_order: list[int],
     client: SwitchClient,
     *,
-    start_sound: str = "",
-    stop_sound: str = "",
+    event_start_sound: str = "",
+    event_stop_sound: str = "",
     sleeper: Sleeper = time.sleep,
     cancel: CancelToken | None = None,
     progress_callback: ProgressCallback | None = None,
@@ -115,8 +115,8 @@ def run_sequence(
         seq: Per-bank configuration (actions and delays).
         bank_order: Order in which to process banks (e.g. ``[1,2,3,4]``).
         client: Protocol client with a ``switch(bank, state)`` method.
-        start_sound: WAV file path to play before the first bank action.
-        stop_sound: WAV file path to play after the last bank action.
+        event_start_sound: WAV file path to play before the first bank action.
+        event_stop_sound: WAV file path to play after the last bank action.
         sleeper: Callable for delays (injected for testing).
         cancel: Optional event-like object; if set, the sequence exits before the next step.
         progress_callback: Optional callback invoked during long-running startup work.
@@ -124,9 +124,9 @@ def run_sequence(
     logger.info("Starting sequence, bank order: %s", bank_order)
 
     # Play start sound
-    if start_sound:
+    if event_start_sound:
         _report_progress(progress_callback)
-        _play_sound(start_sound)
+        _play_sound(event_start_sound)
         _report_progress(progress_callback)
 
     for bank_num in bank_order:
@@ -160,7 +160,7 @@ def run_sequence(
             _report_progress(progress_callback)
         except Exception as exc:
             logger.error("Bank %d: action failed: %s", bank_num, exc)
-            # Do not play stop_sound here; callers own error cleanup.
+            # Do not play event_stop_sound here; callers own error cleanup.
             raise
 
         # Post-delay
@@ -174,9 +174,9 @@ def run_sequence(
                 return
 
     # Play stop sound
-    if stop_sound:
+    if event_stop_sound:
         _report_progress(progress_callback)
-        _play_sound(stop_sound)
+        _play_sound(event_stop_sound)
         _report_progress(progress_callback)
 
     logger.info("Sequence complete")
@@ -195,8 +195,8 @@ def run_boot(
         config.boot,
         BOOT_ORDER,
         client,
-        start_sound=config.start_sound,
-        stop_sound=config.stop_sound,
+        event_start_sound=config.event_start_sound,
+        event_stop_sound=config.event_stop_sound,
         sleeper=sleeper,
         cancel=cancel,
         progress_callback=progress_callback,
@@ -216,8 +216,8 @@ def run_shutdown(
         config.shutdown,
         SHUTDOWN_ORDER,
         client,
-        start_sound=config.start_sound,
-        stop_sound=config.stop_sound,
+        event_start_sound=config.event_start_sound,
+        event_stop_sound=config.event_stop_sound,
         sleeper=sleeper,
         cancel=cancel,
         progress_callback=progress_callback,

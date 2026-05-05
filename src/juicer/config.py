@@ -1,62 +1,39 @@
-"""Juicer configuration — Pydantic models, registry store, and JSON store.
-
-Registry paths match the C++ implementation exactly:
-  ``HKLM\\System\\CurrentControlSet\\Services\\juicer\\boot``
-  ``HKLM\\System\\CurrentControlSet\\Services\\juicer\\shutdown``
-"""
+"""Juicer configuration — Pydantic models and TOML-backed storage."""
 
 from __future__ import annotations
 
 import abc
-import json
 import logging
+import os
 import platform
+import tempfile
+import tomllib
 from enum import IntEnum
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
-# ──────────────────────────────────────────────────────────────────────
-# Constants matching C++ registry layout
-# ──────────────────────────────────────────────────────────────────────
-
-REG_ROOT = r"System\CurrentControlSet\Services\juicer"
-REG_BOOT_SUBKEY = "boot"
-REG_SHUTDOWN_SUBKEY = "shutdown"
-REG_BOOTKEY = f"{REG_ROOT}\\{REG_BOOT_SUBKEY}"
-REG_SHUTDOWNKEY = f"{REG_ROOT}\\{REG_SHUTDOWN_SUBKEY}"
-
-
-# ──────────────────────────────────────────────────────────────────────
-# Enums
-# ──────────────────────────────────────────────────────────────────────
+NUM_BANKS = 4
 
 
 class BankAction(IntEnum):
     """Action to perform on a bank during a power sequence.
 
-    Matches C++ registry: 0 = OFF, 1 = ON.
-    ``None`` / absent registry value means "skip this bank".
+    Matches the device protocol/config convention: 0 = OFF, 1 = ON.
+    ``None`` means "skip this bank".
     """
 
     OFF = 0
     ON = 1
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Pydantic Models
-# ──────────────────────────────────────────────────────────────────────
-
-
 class BankConfig(BaseModel):
-    """Configuration for one bank in a boot/shutdown sequence.
+    """Configuration for one bank in a boot/shutdown sequence."""
 
-    If ``action`` is ``None`` the bank is skipped entirely (matches C++ behaviour
-    when the registry value is absent).
-    """
+    model_config = ConfigDict(validate_assignment=True)
 
     action: BankAction | None = None
     pre_delay_ms: int = Field(default=0, ge=0, description="Milliseconds before action")
@@ -64,7 +41,9 @@ class BankConfig(BaseModel):
 
 
 class SequenceConfig(BaseModel):
-    """Per-sequence (boot or shutdown) configuration for all four banks."""
+    """Per-sequence configuration for all four banks."""
+
+    model_config = ConfigDict(validate_assignment=True)
 
     bank1: BankConfig = Field(default_factory=BankConfig)
     bank2: BankConfig = Field(default_factory=BankConfig)
@@ -85,12 +64,13 @@ class SequenceConfig(BaseModel):
 
 
 class GlobalConfig(BaseModel):
-    """Top-level Juicer configuration combining both sequences and global settings."""
+    """Top-level Juicer configuration."""
+
+    model_config = ConfigDict(validate_assignment=True)
 
     port: str = Field(default="COM3", min_length=1, description="Serial port name")
-    verbose: bool = False
-    start_sound: str = ""
-    stop_sound: str = ""
+    event_start_sound: str = ""
+    event_stop_sound: str = ""
     boot: SequenceConfig = Field(default_factory=SequenceConfig)
     shutdown: SequenceConfig = Field(default_factory=SequenceConfig)
 
@@ -98,11 +78,6 @@ class GlobalConfig(BaseModel):
     @classmethod
     def _strip_port(cls, v: str) -> str:
         return v.strip()
-
-
-# ──────────────────────────────────────────────────────────────────────
-# Store Abstract Base Class
-# ──────────────────────────────────────────────────────────────────────
 
 
 class ConfigStore(abc.ABC):
@@ -117,229 +92,109 @@ class ConfigStore(abc.ABC):
         """Persist the configuration."""
 
 
-# ──────────────────────────────────────────────────────────────────────
-# JSON Store (cross-platform, import/export)
-# ──────────────────────────────────────────────────────────────────────
+class TomlStore(ConfigStore):
+    """Read/write configuration as a TOML file."""
 
-
-class JsonStore(ConfigStore):
-    """Read/write configuration as a JSON file.
-
-    Useful for import/export and for testing on non-Windows systems.
-    """
-
-    def __init__(self, path: str | Path) -> None:
-        self.path = Path(path)
+    def __init__(self, path: str | Path | None = None) -> None:
+        self.path = Path(path) if path is not None else default_config_path()
 
     def load(self) -> GlobalConfig:
-        """Load config from JSON file. Raises ``FileNotFoundError`` if missing."""
-        data = json.loads(self.path.read_text(encoding="utf-8"))
+        """Load config from TOML file. Raises ``FileNotFoundError`` if missing."""
+        with self.path.open("rb") as file:
+            data = tomllib.load(file)
         return GlobalConfig.model_validate(data)
 
     def save(self, config: GlobalConfig) -> None:
-        """Save config to JSON file with pretty formatting."""
+        """Atomically save config to a TOML file."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            config.model_dump_json(indent=2) + "\n",
-            encoding="utf-8",
+        content = dump_config_toml(config)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{self.path.name}.",
+            suffix=".tmp",
+            dir=self.path.parent,
         )
+        tmp_path = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as file:
+                file.write(content)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(tmp_path, self.path)
+        except Exception:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            finally:
+                raise
         logger.info("Config saved to %s", self.path)
 
 
-# ──────────────────────────────────────────────────────────────────────
-# Windows Registry Store
-# ──────────────────────────────────────────────────────────────────────
+def default_config_path() -> Path:
+    """Return the default TOML config path for this platform."""
+    if platform.system() == "Windows":
+        base = os.environ.get("PROGRAMDATA")
+        if base:
+            return Path(base) / "Juicer" / "config.toml"
+    return Path.home() / ".juicer" / "config.toml"
 
 
-def _is_windows() -> bool:
-    return platform.system() == "Windows"
+def _quote_toml_string(value: str) -> str:
+    """Return a TOML basic string literal for arbitrary text."""
+    escapes = {
+        "\\": "\\\\",
+        '"': '\\"',
+        "\b": "\\b",
+        "\t": "\\t",
+        "\n": "\\n",
+        "\f": "\\f",
+        "\r": "\\r",
+    }
+    chars: list[str] = []
+    for char in value:
+        if char in escapes:
+            chars.append(escapes[char])
+        elif ord(char) < 0x20:
+            chars.append(f"\\u{ord(char):04X}")
+        else:
+            chars.append(char)
+    return f'"{"".join(chars)}"'
 
 
-class WindowsRegistryStore(ConfigStore):
-    """Read/write configuration from Windows registry.
+def _format_toml_value(value: str | int | bool) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    return _quote_toml_string(value)
 
-    Registry layout matches the C++ implementation exactly::
 
-        HKLM\\System\\CurrentControlSet\\Services\\juicer\\boot\\
-            Verbose      REG_DWORD
-            StartSound   REG_SZ
-            StopSound    REG_SZ
-            Port         REG_SZ
-            Bank1Action  REG_DWORD
-            Bank1PreDelay  REG_DWORD
-            Bank1PostDelay REG_DWORD
-            ...
+def _bank_to_toml(name: str, cfg: BankConfig) -> list[str]:
+    lines = [f"[{name}]"]
+    if cfg.action is not None:
+        lines.append(f"action = {cfg.action.value}")
+    lines.append(f"pre_delay_ms = {cfg.pre_delay_ms}")
+    lines.append(f"post_delay_ms = {cfg.post_delay_ms}")
+    return lines
 
-    The same layout is repeated under ``\\shutdown``.
 
-    This class is importable on any OS but raises ``OSError`` at runtime
-    when methods are called on non-Windows platforms.
-    """
+def _sequence_to_toml(name: str, seq: SequenceConfig) -> list[str]:
+    lines: list[str] = []
+    for bank in range(1, NUM_BANKS + 1):
+        if lines:
+            lines.append("")
+        lines.extend(_bank_to_toml(f"{name}.bank{bank}", seq.bank(bank)))
+    return lines
 
-    def __init__(self) -> None:
-        if not _is_windows():
-            logger.warning(
-                "WindowsRegistryStore instantiated on %s — "
-                "load()/save() will raise OSError at runtime.",
-                platform.system(),
-            )
 
-    def _ensure_windows(self) -> None:
-        if not _is_windows():
-            raise OSError("WindowsRegistryStore requires Windows")
-
-    def _read_sequence(self, subkey: str) -> tuple[SequenceConfig, dict[str, Any]]:
-        """Read a single sequence (boot or shutdown) from registry.
-
-        Returns ``(SequenceConfig, common_values_dict)``.
-        """
-        import winreg
-
-        key_path = f"{REG_ROOT}\\{subkey}"
-        common: dict[str, Any] = {}
-        seq = SequenceConfig()
-
-        try:
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, winreg.KEY_READ)
-        except FileNotFoundError:
-            logger.warning("Registry key not found: HKLM\\%s", key_path)
-            return seq, common
-
-        try:
-            # Read common values
-            common["verbose"] = self._read_dword(key, "Verbose", 0) != 0
-            common["start_sound"] = self._read_sz(key, "StartSound", "")
-            common["stop_sound"] = self._read_sz(key, "StopSound", "")
-            common["port"] = self._read_sz(key, "Port", "COM3")
-
-            # Read per-bank configs
-            for n in range(1, 5):
-                action_raw = self._read_dword_optional(key, f"Bank{n}Action")
-                if action_raw is None:
-                    cfg = BankConfig(action=None)
-                else:
-                    cfg = BankConfig(
-                        action=BankAction(action_raw) if action_raw in (0, 1) else None,
-                        pre_delay_ms=self._read_dword(key, f"Bank{n}PreDelay", 0),
-                        post_delay_ms=self._read_dword(key, f"Bank{n}PostDelay", 0),
-                    )
-                seq.set_bank(n, cfg)
-        finally:
-            winreg.CloseKey(key)
-
-        return seq, common
-
-    def _write_sequence(
-        self, subkey: str, seq: SequenceConfig, common: dict[str, Any]
-    ) -> None:
-        """Write a single sequence to registry, creating keys as needed."""
-        import winreg
-
-        key_path = f"{REG_ROOT}\\{subkey}"
-        key = winreg.CreateKeyEx(
-            winreg.HKEY_LOCAL_MACHINE, key_path, 0, winreg.KEY_WRITE
-        )
-        try:
-            # Common values
-            winreg.SetValueEx(key, "Verbose", 0, winreg.REG_DWORD, int(common.get("verbose", 0)))
-            winreg.SetValueEx(key, "StartSound", 0, winreg.REG_SZ, common.get("start_sound", ""))
-            winreg.SetValueEx(key, "StopSound", 0, winreg.REG_SZ, common.get("stop_sound", ""))
-            winreg.SetValueEx(key, "Port", 0, winreg.REG_SZ, common.get("port", "COM3"))
-
-            # Per-bank
-            for n in range(1, 5):
-                bank_cfg = seq.bank(n)
-                if bank_cfg.action is not None:
-                    winreg.SetValueEx(
-                        key, f"Bank{n}Action", 0, winreg.REG_DWORD, bank_cfg.action.value
-                    )
-                    winreg.SetValueEx(
-                        key, f"Bank{n}PreDelay", 0, winreg.REG_DWORD, bank_cfg.pre_delay_ms
-                    )
-                    winreg.SetValueEx(
-                        key, f"Bank{n}PostDelay", 0, winreg.REG_DWORD, bank_cfg.post_delay_ms
-                    )
-                else:
-                    # Remove values for skipped banks
-                    for val_name in (f"Bank{n}Action", f"Bank{n}PreDelay", f"Bank{n}PostDelay"):
-                        try:
-                            winreg.DeleteValue(key, val_name)
-                        except FileNotFoundError:
-                            pass
-        finally:
-            winreg.CloseKey(key)
-
-    def load(self) -> GlobalConfig:
-        """Load configuration from both registry keys.
-
-        Global values (port, verbosity, sounds) are read from the boot subkey when
-        present; shutdown values are used only as a fallback for legacy layouts.
-        """
-        self._ensure_windows()
-
-        boot_seq, boot_common = self._read_sequence(REG_BOOT_SUBKEY)
-        shutdown_seq, shutdown_common = self._read_sequence(REG_SHUTDOWN_SUBKEY)
-
-        # Use boot common values as authoritative (they should be the same)
-        common = boot_common if boot_common.get("port") else shutdown_common
-
-        return GlobalConfig(
-            port=common.get("port", "COM3"),
-            verbose=common.get("verbose", False),
-            start_sound=common.get("start_sound", ""),
-            stop_sound=common.get("stop_sound", ""),
-            boot=boot_seq,
-            shutdown=shutdown_seq,
-        )
-
-    def save(self, config: GlobalConfig) -> None:
-        """Save configuration to both boot and shutdown registry keys."""
-        self._ensure_windows()
-
-        common = {
-            "port": config.port,
-            "verbose": config.verbose,
-            "start_sound": config.start_sound,
-            "stop_sound": config.stop_sound,
-        }
-        self._write_sequence(REG_BOOT_SUBKEY, config.boot, common)
-        self._write_sequence(REG_SHUTDOWN_SUBKEY, config.shutdown, common)
-        logger.info("Config saved to Windows registry")
-
-    # ── Registry value helpers ────────────────────────────────────────
-
-    @staticmethod
-    def _read_dword(key: Any, name: str, default: int) -> int:
-        import winreg
-
-        try:
-            value, reg_type = winreg.QueryValueEx(key, name)
-            if reg_type == winreg.REG_DWORD:
-                return int(value)
-        except FileNotFoundError:
-            pass
-        return default
-
-    @staticmethod
-    def _read_dword_optional(key: Any, name: str) -> int | None:
-        import winreg
-
-        try:
-            value, reg_type = winreg.QueryValueEx(key, name)
-            if reg_type == winreg.REG_DWORD:
-                return int(value)
-        except FileNotFoundError:
-            pass
-        return None
-
-    @staticmethod
-    def _read_sz(key: Any, name: str, default: str) -> str:
-        import winreg
-
-        try:
-            value, reg_type = winreg.QueryValueEx(key, name)
-            if reg_type == winreg.REG_SZ and value:
-                return str(value)
-        except FileNotFoundError:
-            pass
-        return default
+def dump_config_toml(config: GlobalConfig) -> str:
+    lines = [
+        f"port = {_format_toml_value(config.port)}",
+        f"event_start_sound = {_format_toml_value(config.event_start_sound)}",
+        f"event_stop_sound = {_format_toml_value(config.event_stop_sound)}",
+        "",
+    ]
+    lines.extend(_sequence_to_toml("boot", config.boot))
+    lines.append("")
+    lines.append("")
+    lines.extend(_sequence_to_toml("shutdown", config.shutdown))
+    lines.append("")
+    return "\n".join(lines)

@@ -896,6 +896,31 @@ class JuicerClient:
                 break
         return results
 
+    def _recv_variable(
+        self,
+        *,
+        min_lines: int,
+        max_lines: int,
+        quiet_timeout: float = 0.25,
+        context: str,
+    ) -> list[ParsedResponse]:
+        """Read a response with required initial lines and optional trailing lines."""
+        results: list[ParsedResponse] = []
+        for _ in range(min_lines):
+            resp = self._recv_parsed()
+            if isinstance(resp, InvalidParameterResponse):
+                raise ProtocolError(f"{context}: device returned $INVALID_PARAMETER")
+            results.append(resp)
+        for _ in range(max_lines - min_lines):
+            try:
+                resp = self._recv_parsed(quiet_timeout)
+            except JuicerTimeoutError:
+                break
+            if isinstance(resp, InvalidParameterResponse):
+                raise ProtocolError(f"{context}: device returned $INVALID_PARAMETER")
+            results.append(resp)
+        return results
+
     def _expect_one(
         self,
         expected_type: type[T],
@@ -955,19 +980,28 @@ class JuicerClient:
     # ── Commands ──────────────────────────────────────────────────────
 
     def all_on(self) -> list[ParsedResponse]:
-        """Send ``!ALL_ON`` and collect bank status responses."""
+        """Send ``!ALL_ON`` and collect documented status responses."""
         self._send(cmd_all_on())
-        return self._expect_all_bank_statuses(BankState.ON, context="!ALL_ON")
+        return self._recv_variable(min_lines=1, max_lines=6, context="!ALL_ON")
 
     def all_off(self) -> list[ParsedResponse]:
-        """Send ``!ALL_OFF`` and collect bank status responses."""
+        """Send ``!ALL_OFF`` and collect documented status responses."""
         self._send(cmd_all_off())
-        return self._expect_all_bank_statuses(BankState.OFF, context="!ALL_OFF")
+        return self._recv_variable(min_lines=4, max_lines=6, context="!ALL_OFF")
 
     def switch(self, bank: int | BankNumber, state: str | BankState) -> list[ParsedResponse]:
-        """Send ``!SWITCH`` and collect the bank status response."""
+        """Send ``!SWITCH`` and collect protocol status lines.
+
+        Banks 1 and 2 report one bank status line. Banks 3 and 4 may also
+        report related bank/battery status lines when battery threshold rules
+        affect the requested action.
+        """
         self._send(cmd_switch(bank, state))
-        return [self._expect_bank_status(bank, state=state, context="!SWITCH")]
+        first = self._expect_bank_status(bank, context="!SWITCH")
+        responses: list[ParsedResponse] = [first]
+        if BankNumber(bank) in (BankNumber.BANK3, BankNumber.BANK4):
+            responses.extend(self._recv_until_timeout(timeout=0.25, max_lines=3))
+        return responses
 
     def set_batthresh(self, bank: int | BankNumber, level: int) -> list[ParsedResponse]:
         """Send ``!SET_BATTHRESH`` and read response."""
@@ -1150,7 +1184,7 @@ class JuicerClient:
         """Send ``?LIST_CONFIG`` and aggregate response lines."""
         self._send(query_list_config())
         cfg = ListConfigResponse()
-        responses = self._recv_n(10)
+        responses = self._recv_variable(min_lines=9, max_lines=10, context="?LIST_CONFIG")
         for resp in responses:
             if isinstance(resp, BatteryThresholdResponse | BatteryThresholdGlobalResponse):
                 cfg.bthresh = resp.level
@@ -1180,7 +1214,7 @@ class JuicerClient:
         """Send ``?HELP`` and return the list of command/query names."""
         self._send(query_help())
         lines: list[str] = []
-        responses = self._recv_n(_HELP_RESPONSE_LINES)
+        responses = self._recv_variable(min_lines=1, max_lines=40, context="?HELP")
         for resp in responses:
             if isinstance(resp, RawResponse):
                 lines.append(resp.raw)

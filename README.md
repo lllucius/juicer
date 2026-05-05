@@ -9,8 +9,7 @@ Juicer provides:
 - A **GUI** (`juicer-gui`) built with PySide6 for interactive control.
 - A **Windows service** that runs the configured boot/shutdown sequences
   automatically on system start and stop.
-- A **configuration system** that stores settings in the Windows registry
-  (matching the original C++ layout) or in a portable JSON file.
+- A **configuration system** that stores settings in a portable TOML file.
 
 ---
 
@@ -36,7 +35,7 @@ Juicer provides:
 | pydantic    | ≥ 2.0   |
 | pyserial    | ≥ 3.5   |
 | PySide6 *(GUI extra only)* | ≥ 6.6 |
-| pywin32 *(Windows service/registry only)* | ≥ 306 |
+| pywin32 *(Windows service only)* | ≥ 306 |
 
 A Furman F1500-UPS E connected via a null-modem RS-232 cable is required for
 actual device control. All protocol logic works without hardware — you can
@@ -166,16 +165,15 @@ juicer boot
 juicer shutdown
 ```
 
-Reads configuration from the Windows registry (Windows) or
-`~/.juicer/config.json` (other platforms) and executes the stored
-boot or shutdown sequence.
+Reads configuration from the TOML config file and executes the stored boot or
+shutdown sequence.
 
 #### `config` — manage configuration
 
 ```bash
-juicer config show                   # Display current config as JSON
-juicer config export config.json     # Export to a file
-juicer config import config.json     # Import from a file
+juicer config show                   # Display current config as TOML
+juicer config export config.toml     # Export to a file
+juicer config import config.toml     # Import from a file
 ```
 
 #### `service` — manage the Windows service *(Windows only)*
@@ -210,11 +208,15 @@ The GUI is organized into tabs:
 | **Boot Sequence** | Per-bank action and delay configuration |
 | **Shutdown Sequence** | Same for the shutdown sequence |
 | **Service** | Install/uninstall/start/stop the Windows service |
-| **Import/Export** | Save and load JSON configuration |
+| **Device Status** | Detailed device identification, power, load, and battery queries |
+| **Device Config** | Device buzzer, AVR, feedback, display, threshold, and reset controls |
+| **Import/Export** | Save and load TOML configuration |
 | **Log** | Scrolling log of all events |
 
-Configuration is automatically loaded from the Windows registry (Windows) or
-`~/.juicer/config.json` on launch, and saved when the window is closed.
+Configuration is automatically loaded from the TOML config file on launch and
+saved when the window is closed. On Windows the default path is
+`%PROGRAMDATA%\Juicer\config.toml`; on other platforms it is
+`~/.juicer/config.toml`.
 
 ---
 
@@ -223,48 +225,63 @@ Configuration is automatically loaded from the Windows registry (Windows) or
 The Juicer configuration describes:
 
 - **`port`** — serial port name (e.g. `COM3`, `/dev/ttyS0`).
-- **`verbose`** — enable debug logging.
-- **`start_sound`** / **`stop_sound`** — paths to WAV files played at the
-  start and end of a sequence (Windows only).
+- **`event_start_sound`** / **`event_stop_sound`** — optional WAV files played
+  at the beginning and end of a sequence event (Windows only).
 - **`boot`** / **`shutdown`** — per-sequence, per-bank settings:
   - `action`: `0` = OFF, `1` = ON, absent = skip.
   - `pre_delay_ms`: milliseconds to wait *before* the action.
   - `post_delay_ms`: milliseconds to wait *after* the action.
 
-### JSON example
+### TOML example
 
-```json
-{
-  "port": "COM3",
-  "verbose": false,
-  "start_sound": "",
-  "stop_sound": "",
-  "boot": {
-    "bank1": {"action": 1, "pre_delay_ms": 0,    "post_delay_ms": 2000},
-    "bank2": {"action": 1, "pre_delay_ms": 0,    "post_delay_ms": 2000},
-    "bank3": {"action": 1, "pre_delay_ms": 0,    "post_delay_ms": 2000},
-    "bank4": {"action": 1, "pre_delay_ms": 0,    "post_delay_ms": 0}
-  },
-  "shutdown": {
-    "bank4": {"action": 0, "pre_delay_ms": 0,    "post_delay_ms": 2000},
-    "bank3": {"action": 0, "pre_delay_ms": 0,    "post_delay_ms": 2000},
-    "bank2": {"action": 0, "pre_delay_ms": 0,    "post_delay_ms": 2000},
-    "bank1": {"action": 0, "pre_delay_ms": 0,    "post_delay_ms": 0}
-  }
-}
+```toml
+port = "COM3"
+event_start_sound = ""
+event_stop_sound = ""
+
+[boot.bank1]
+action = 1
+pre_delay_ms = 0
+post_delay_ms = 2000
+
+[boot.bank2]
+action = 1
+pre_delay_ms = 0
+post_delay_ms = 2000
+
+[boot.bank3]
+action = 1
+pre_delay_ms = 0
+post_delay_ms = 2000
+
+[boot.bank4]
+action = 1
+pre_delay_ms = 0
+post_delay_ms = 0
+
+[shutdown.bank4]
+action = 0
+pre_delay_ms = 0
+post_delay_ms = 2000
+
+[shutdown.bank3]
+action = 0
+pre_delay_ms = 0
+post_delay_ms = 2000
+
+[shutdown.bank2]
+action = 0
+pre_delay_ms = 0
+post_delay_ms = 2000
+
+[shutdown.bank1]
+action = 0
+pre_delay_ms = 0
+post_delay_ms = 0
 ```
 
-### Windows registry layout
-
-Settings are stored under:
-
-```
-HKLM\System\CurrentControlSet\Services\juicer\boot\
-HKLM\System\CurrentControlSet\Services\juicer\shutdown\
-```
-
-Use `juicer config export config.json` to back up the registry settings to a
-portable JSON file, and `juicer config import config.json` to restore them.
+Use `juicer config export config.toml` to back up settings to a portable TOML
+file, and `juicer config import config.toml` to restore them.
 
 ---
 
@@ -309,7 +326,7 @@ juicer/
 │       ├── __init__.py     # Package version
 │       ├── __main__.py     # python -m juicer entry point
 │       ├── cli.py          # Click CLI
-│       ├── config.py       # Pydantic models + registry/JSON stores
+│       ├── config.py       # Pydantic models + TOML store
 │       ├── gui.py          # PySide6 GUI
 │       ├── protocol.py     # Serial protocol (commands, responses, transport)
 │       ├── sequence.py     # Boot/shutdown sequencer
