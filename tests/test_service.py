@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import importlib
+import logging
+import os
+import subprocess
 import sys
 import types
 from collections.abc import Callable
@@ -108,6 +111,8 @@ def test_run_boot_sequence_closes_transport_when_progress_callback_after_open_fa
     closed: list[object] = []
 
     class FakeStore:
+        path = tmp_path / "config.toml"
+
         def load(self) -> config_module.GlobalConfig:
             return config_module.GlobalConfig(port="COM1")
 
@@ -142,6 +147,77 @@ def test_run_boot_sequence_closes_transport_when_progress_callback_after_open_fa
 
     assert len(opened) == 1
     assert closed == opened
+
+
+def test_service_boot_and_shutdown_logs_are_written_next_to_config(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import juicer.config as config_module
+    import juicer.protocol as protocol_module
+    import juicer.sequence as sequence_module
+    import juicer.service as service_module
+
+    config_path = tmp_path / "config.toml"
+
+    class FakeStore:
+        path = config_path
+
+        def load(self) -> config_module.GlobalConfig:
+            return config_module.GlobalConfig(port="COM1")
+
+    class FakeTransport:
+        def __init__(self, port: str) -> None:
+            self.port = port
+
+        def open(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class FakeClient:
+        def __init__(self, transport: FakeTransport) -> None:
+            self.transport = transport
+
+    def run_boot(*args: object, **kwargs: object) -> None:
+        logging.getLogger("juicer.sequence").info("boot sequence detail")
+
+    def run_shutdown(*args: object, **kwargs: object) -> None:
+        logging.getLogger("juicer.sequence").info("shutdown sequence detail")
+
+    monkeypatch.setattr(config_module, "TomlStore", FakeStore)
+    monkeypatch.setattr(protocol_module, "SerialTransport", FakeTransport)
+    monkeypatch.setattr(protocol_module, "JuicerClient", FakeClient)
+    monkeypatch.setattr(sequence_module, "run_boot", run_boot)
+    monkeypatch.setattr(sequence_module, "run_shutdown", run_shutdown)
+
+    service_module._run_boot_sequence()
+    service_module._run_shutdown_sequence()
+
+    assert (tmp_path / "boot.log").is_file()
+    assert (tmp_path / "shutdown.log").is_file()
+    assert "boot sequence detail" in (tmp_path / "boot.log").read_text(encoding="utf-8")
+    assert "shutdown sequence detail" in (tmp_path / "shutdown.log").read_text(encoding="utf-8")
+
+
+def test_cli_can_run_directly_from_source_directory() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    cli_dir = repo_root / "src" / "juicer"
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+
+    result = subprocess.run(
+        [sys.executable, "cli.py", "--help"],
+        cwd=cli_dir,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Juicer" in result.stdout
 
 
 def test_install_service_uses_native_python_service_host(
