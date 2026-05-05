@@ -14,6 +14,9 @@ import os
 import platform
 import site
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Callable, cast
 
 logger = logging.getLogger(__name__)
@@ -55,6 +58,36 @@ def _ensure_pywin32() -> None:
 ProgressCallback = Callable[[], None]
 
 
+def _service_log_path(name: str) -> Path:
+    """Return a service log path next to the TOML configuration."""
+    from juicer.config import TomlStore
+
+    config_path = TomlStore().path
+    return config_path.with_name(f"{name}.log")
+
+
+@contextmanager
+def _service_file_logging(name: str) -> Iterator[Path]:
+    """Temporarily route service Python logging to a sequence-specific file."""
+    path = _service_log_path(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(path, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    root_logger = logging.getLogger()
+    root_logger.addHandler(handler)
+    previous_level = root_logger.level
+    if previous_level > logging.INFO:
+        root_logger.setLevel(logging.INFO)
+    try:
+        logger.info("Writing %s service log to %s", name, path)
+        yield path
+    finally:
+        logger.info("Finished writing %s service log to %s", name, path)
+        root_logger.removeHandler(handler)
+        root_logger.setLevel(previous_level)
+        handler.close()
+
+
 class _Win32CancelToken:
     """Cancellation token backed by a Win32 event handle."""
 
@@ -75,20 +108,21 @@ def _run_boot_sequence(
     from juicer.protocol import JuicerClient, SerialTransport
     from juicer.sequence import run_boot
 
-    store = TomlStore()
-    config = store.load()
+    with _service_file_logging("boot"):
+        store = TomlStore()
+        config = store.load()
 
-    transport = SerialTransport(port=config.port)
-    if progress_callback is not None:
-        progress_callback()
-    transport.open()
-    try:
+        transport = SerialTransport(port=config.port)
         if progress_callback is not None:
             progress_callback()
-        client = JuicerClient(transport)
-        run_boot(config, client, progress_callback=progress_callback, cancel=cancel)
-    finally:
-        transport.close()
+        transport.open()
+        try:
+            if progress_callback is not None:
+                progress_callback()
+            client = JuicerClient(transport)
+            run_boot(config, client, progress_callback=progress_callback, cancel=cancel)
+        finally:
+            transport.close()
 
 
 def _run_shutdown_sequence() -> None:
@@ -97,16 +131,17 @@ def _run_shutdown_sequence() -> None:
     from juicer.protocol import JuicerClient, SerialTransport
     from juicer.sequence import run_shutdown
 
-    store = TomlStore()
-    config = store.load()
+    with _service_file_logging("shutdown"):
+        store = TomlStore()
+        config = store.load()
 
-    transport = SerialTransport(port=config.port)
-    transport.open()
-    try:
-        client = JuicerClient(transport)
-        run_shutdown(config, client)
-    finally:
-        transport.close()
+        transport = SerialTransport(port=config.port)
+        transport.open()
+        try:
+            client = JuicerClient(transport)
+            run_shutdown(config, client)
+        finally:
+            transport.close()
 
 
 # ── Conditional class definition to allow import on any OS ────────────

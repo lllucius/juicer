@@ -91,6 +91,22 @@ if _PYSIDE6_AVAILABLE:
             msg = self.format(record)
             self._signal.message.emit(msg)
 
+    def _set_help(widget: QWidget, text: str) -> None:
+        """Set tooltip and status-tip help text for a widget."""
+        widget.setToolTip(text)
+        widget.setStatusTip(text)
+
+    def _label(text: str, buddy: QWidget | None = None, help_text: str | None = None) -> QLabel:
+        """Create a label with an optional accelerator buddy and tooltip."""
+        label = QLabel(text)
+        if buddy is not None:
+            label.setBuddy(buddy)
+        if help_text is not None:
+            _set_help(label, help_text)
+            if buddy is not None:
+                _set_help(buddy, help_text)
+        return label
+
     # ──────────────────────────────────────────────────────────────────
     # Worker for background serial operations
     # ──────────────────────────────────────────────────────────────────
@@ -133,10 +149,12 @@ if _PYSIDE6_AVAILABLE:
 
             self.lbl_port = QLabel("Not connected")
             self.lbl_port.setAccessibleName("Connected Port")
+            _set_help(self.lbl_port, "The serial port currently connected to the UPS.")
             conn_layout.addRow("Port:", self.lbl_port)
 
             self.lbl_status = QLabel("Disconnected")
             self.lbl_status.setAccessibleName("Connection Status")
+            _set_help(self.lbl_status, "The current serial connection state.")
             conn_layout.addRow("Status:", self.lbl_status)
 
             layout.addWidget(conn_group)
@@ -151,6 +169,7 @@ if _PYSIDE6_AVAILABLE:
                 lbl_name = QLabel(f"Bank {i}:")
                 lbl_state = QLabel("Unknown")
                 lbl_state.setAccessibleName(f"Bank {i} State")
+                _set_help(lbl_state, f"The current on/off state reported for outlet bank {i}.")
                 self.bank_labels[i] = lbl_state
                 banks_layout.addWidget(lbl_name, i - 1, 0)
                 banks_layout.addWidget(lbl_state, i - 1, 1)
@@ -164,10 +183,12 @@ if _PYSIDE6_AVAILABLE:
 
             self.lbl_power = QLabel("Unknown")
             self.lbl_power.setAccessibleName("Power Status")
+            _set_help(self.lbl_power, "The current mains power status reported by the UPS.")
             power_layout.addRow("Mains:", self.lbl_power)
 
             self.lbl_battery = QLabel("Unknown")
             self.lbl_battery.setAccessibleName("Battery Level")
+            _set_help(self.lbl_battery, "The current battery charge level reported by the UPS.")
             power_layout.addRow("Battery:", self.lbl_battery)
 
             layout.addWidget(power_group)
@@ -213,31 +234,36 @@ if _PYSIDE6_AVAILABLE:
             self.combo_port.setAccessibleName("Serial Port Selection")
             self.combo_port.setEditable(True)
             self.combo_port.setMinimumWidth(150)
+            _set_help(self.combo_port, "Select or type the serial port connected to the UPS.")
             port_row.addWidget(self.combo_port)
 
-            self.btn_refresh = QPushButton("Refresh")
+            self.btn_refresh = QPushButton("&Refresh")
             self.btn_refresh.setAccessibleName("Refresh Ports")
+            _set_help(self.btn_refresh, "Refresh the list of available serial ports.")
             self.btn_refresh.clicked.connect(self._refresh_ports)
             port_row.addWidget(self.btn_refresh)
 
-            form.addRow("Port:", port_row)
+            form.addRow(_label("&Port:", self.combo_port), port_row)
 
             # Baud rate display (read-only, always 9600)
             self.lbl_baud = QLabel("9600-8-N-1 (fixed)")
             self.lbl_baud.setAccessibleName("Baud Rate Display")
+            _set_help(self.lbl_baud, "The fixed serial settings used by the UPS protocol.")
             form.addRow("Settings:", self.lbl_baud)
 
             layout.addWidget(form_group)
 
             # Connect / Disconnect buttons
             btn_row = QHBoxLayout()
-            self.btn_connect = QPushButton("Connect")
+            self.btn_connect = QPushButton("&Connect")
             self.btn_connect.setAccessibleName("Connect to Serial Port")
+            _set_help(self.btn_connect, "Open the selected serial port and connect to the UPS.")
             self.btn_connect.clicked.connect(self._on_connect)
             btn_row.addWidget(self.btn_connect)
 
-            self.btn_disconnect = QPushButton("Disconnect")
+            self.btn_disconnect = QPushButton("&Disconnect")
             self.btn_disconnect.setAccessibleName("Disconnect from Serial Port")
+            _set_help(self.btn_disconnect, "Close the active serial connection.")
             self.btn_disconnect.setEnabled(False)
             self.btn_disconnect.clicked.connect(self._on_disconnect)
             btn_row.addWidget(self.btn_disconnect)
@@ -326,13 +352,15 @@ if _PYSIDE6_AVAILABLE:
             global_group.setAccessibleName("Global Outlet Controls")
             global_layout = QHBoxLayout(global_group)
 
-            self.btn_all_on = QPushButton("All ON")
+            self.btn_all_on = QPushButton("&All ON")
             self.btn_all_on.setAccessibleName("Turn All Banks On")
+            _set_help(self.btn_all_on, "Turn all UPS outlet banks on.")
             self.btn_all_on.clicked.connect(lambda: self.command_requested.emit("all_on", None))
             global_layout.addWidget(self.btn_all_on)
 
-            self.btn_all_off = QPushButton("All OFF")
+            self.btn_all_off = QPushButton("All O&FF")
             self.btn_all_off.setAccessibleName("Turn All Banks Off")
+            _set_help(self.btn_all_off, "Turn all UPS outlet banks off.")
             self.btn_all_off.clicked.connect(lambda: self.command_requested.emit("all_off", None))
             global_layout.addWidget(self.btn_all_off)
 
@@ -348,13 +376,15 @@ if _PYSIDE6_AVAILABLE:
                 lbl = QLabel(f"Bank {i}:")
                 banks_layout.addWidget(lbl, i - 1, 0)
 
-                btn_on = QPushButton("ON")
+                btn_on = QPushButton("&ON")
                 btn_on.setAccessibleName(f"Turn Bank {i} On")
+                _set_help(btn_on, f"Turn outlet bank {i} on.")
                 btn_on.clicked.connect(partial(self._switch_bank, i, "ON"))
                 banks_layout.addWidget(btn_on, i - 1, 1)
 
-                btn_off = QPushButton("OFF")
+                btn_off = QPushButton("O&FF")
                 btn_off.setAccessibleName(f"Turn Bank {i} Off")
+                _set_help(btn_off, f"Turn outlet bank {i} off.")
                 btn_off.clicked.connect(partial(self._switch_bank, i, "OFF"))
                 banks_layout.addWidget(btn_off, i - 1, 2)
 
@@ -389,8 +419,12 @@ if _PYSIDE6_AVAILABLE:
             sound_form = QFormLayout(sound_group)
             self.edit_sound = QLineEdit()
             self.edit_sound.setAccessibleName(f"{sound_label} Path")
+            _set_help(
+                self.edit_sound,
+                f"Path to the WAV file to play for the {sound_label.lower()}.",
+            )
             sound_browse_row = self._path_row(self.edit_sound, f"Browse {sound_label}")
-            sound_form.addRow(f"{sound_label}:", sound_browse_row)
+            sound_form.addRow(_label(f"{sound_label} &Path:", self.edit_sound), sound_browse_row)
             layout.addWidget(sound_group)
 
             self.bank_widgets: dict[int, dict[str, Any]] = {}
@@ -401,30 +435,33 @@ if _PYSIDE6_AVAILABLE:
                 row_layout = QHBoxLayout(group)
 
                 # Action combo
-                row_layout.addWidget(QLabel("Action:"))
                 combo = QComboBox()
                 combo.setAccessibleName(f"{label} Bank {i} Action")
                 combo.addItem("No Action", None)
                 combo.addItem("Turn ON", 1)
                 combo.addItem("Turn OFF", 0)
+                _set_help(combo, f"Choose what the {label.lower()} sequence does to bank {i}.")
+                row_layout.addWidget(_label("&Action:", combo))
                 row_layout.addWidget(combo)
 
                 # Pre-delay
-                row_layout.addWidget(QLabel("Delay Before:"))
                 pre_spin = QSpinBox()
                 pre_spin.setAccessibleName(f"{label} Bank {i} Pre-Delay")
                 pre_spin.setRange(0, MAX_QSPINBOX_DELAY_MS)
                 pre_spin.setSuffix(" ms")
                 pre_spin.setSingleStep(100)
+                _set_help(pre_spin, f"Delay before the {label.lower()} action for bank {i}.")
+                row_layout.addWidget(_label("Delay &Before:", pre_spin))
                 row_layout.addWidget(pre_spin)
 
                 # Post-delay
-                row_layout.addWidget(QLabel("Delay After:"))
                 post_spin = QSpinBox()
                 post_spin.setAccessibleName(f"{label} Bank {i} Post-Delay")
                 post_spin.setRange(0, MAX_QSPINBOX_DELAY_MS)
                 post_spin.setSuffix(" ms")
                 post_spin.setSingleStep(100)
+                _set_help(post_spin, f"Delay after the {label.lower()} action for bank {i}.")
+                row_layout.addWidget(_label("Delay A&fter:", post_spin))
                 row_layout.addWidget(post_spin)
 
                 layout.addWidget(group)
@@ -442,8 +479,9 @@ if _PYSIDE6_AVAILABLE:
             row_layout.setContentsMargins(0, 0, 0, 0)
             row_layout.addWidget(edit)
 
-            btn_browse = QPushButton("Browse…")
+            btn_browse = QPushButton("&Browse…")
             btn_browse.setAccessibleName(accessible_name)
+            _set_help(btn_browse, "Browse for a WAV sound file.")
             btn_browse.clicked.connect(lambda: self._browse_sound(edit))
             row_layout.addWidget(btn_browse)
             return row
@@ -521,10 +559,12 @@ if _PYSIDE6_AVAILABLE:
             status_row.addWidget(QLabel("Service Status:"))
             self.lbl_status = QLabel("Unknown")
             self.lbl_status.setAccessibleName("Service Status Display")
+            _set_help(self.lbl_status, "The current Windows service status.")
             status_row.addWidget(self.lbl_status)
 
-            self.btn_refresh_status = QPushButton("Refresh")
+            self.btn_refresh_status = QPushButton("&Refresh")
             self.btn_refresh_status.setAccessibleName("Refresh Service Status")
+            _set_help(self.btn_refresh_status, "Refresh the Juicer Windows service status.")
             self.btn_refresh_status.clicked.connect(self._refresh_status)
             status_row.addWidget(self.btn_refresh_status)
             status_row.addStretch()
@@ -533,23 +573,27 @@ if _PYSIDE6_AVAILABLE:
             # Action buttons
             btn_layout = QGridLayout()
 
-            self.btn_install = QPushButton("Install Service")
+            self.btn_install = QPushButton("&Install Service")
             self.btn_install.setAccessibleName("Install Juicer Service")
+            _set_help(self.btn_install, "Install the Juicer Windows service.")
             self.btn_install.clicked.connect(self._install)
             btn_layout.addWidget(self.btn_install, 0, 0)
 
-            self.btn_uninstall = QPushButton("Uninstall Service")
+            self.btn_uninstall = QPushButton("&Uninstall Service")
             self.btn_uninstall.setAccessibleName("Uninstall Juicer Service")
+            _set_help(self.btn_uninstall, "Uninstall the Juicer Windows service.")
             self.btn_uninstall.clicked.connect(self._uninstall)
             btn_layout.addWidget(self.btn_uninstall, 0, 1)
 
-            self.btn_start = QPushButton("Start Service")
+            self.btn_start = QPushButton("&Start Service")
             self.btn_start.setAccessibleName("Start Juicer Service")
+            _set_help(self.btn_start, "Start the Juicer Windows service.")
             self.btn_start.clicked.connect(self._start)
             btn_layout.addWidget(self.btn_start, 1, 0)
 
-            self.btn_stop = QPushButton("Stop Service")
+            self.btn_stop = QPushButton("S&top Service")
             self.btn_stop.setAccessibleName("Stop Juicer Service")
+            _set_help(self.btn_stop, "Stop the Juicer Windows service.")
             self.btn_stop.clicked.connect(self._stop)
             btn_layout.addWidget(self.btn_stop, 1, 1)
 
@@ -627,8 +671,9 @@ if _PYSIDE6_AVAILABLE:
 
             # Export
             export_row = QHBoxLayout()
-            self.btn_export = QPushButton("Export to TOML…")
+            self.btn_export = QPushButton("&Export to TOML…")
             self.btn_export.setAccessibleName("Export Configuration to TOML File")
+            _set_help(self.btn_export, "Export the current configuration to a TOML file.")
             self.btn_export.clicked.connect(self._export)
             export_row.addWidget(self.btn_export)
             export_row.addStretch()
@@ -636,8 +681,9 @@ if _PYSIDE6_AVAILABLE:
 
             # Import
             import_row = QHBoxLayout()
-            self.btn_import = QPushButton("Import from TOML…")
+            self.btn_import = QPushButton("&Import from TOML…")
             self.btn_import.setAccessibleName("Import Configuration from TOML File")
+            _set_help(self.btn_import, "Import configuration settings from a TOML file.")
             self.btn_import.clicked.connect(self._import)
             import_row.addWidget(self.btn_import)
             import_row.addStretch()
@@ -703,8 +749,9 @@ if _PYSIDE6_AVAILABLE:
 
             header = QHBoxLayout()
             header.addWidget(QLabel("Application Log"))
-            self.btn_clear = QPushButton("Clear")
+            self.btn_clear = QPushButton("&Clear")
             self.btn_clear.setAccessibleName("Clear Log Messages")
+            _set_help(self.btn_clear, "Clear the GUI log viewer.")
             self.btn_clear.clicked.connect(self._clear)
             header.addWidget(self.btn_clear)
             header.addStretch()
@@ -714,6 +761,7 @@ if _PYSIDE6_AVAILABLE:
             self.text_log.setAccessibleName("Log Messages")
             self.text_log.setReadOnly(True)
             self.text_log.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+            _set_help(self.text_log, "Application log messages for this GUI session.")
             layout.addWidget(self.text_log)
 
         @Slot(str)
@@ -736,8 +784,9 @@ if _PYSIDE6_AVAILABLE:
             super().__init__(parent)
             layout = QVBoxLayout(self)
 
-            self.btn_refresh = QPushButton("Refresh Device Status")
+            self.btn_refresh = QPushButton("&Refresh Device Status")
             self.btn_refresh.setAccessibleName("Refresh Device Status")
+            _set_help(self.btn_refresh, "Query the connected UPS for its latest status.")
             self.btn_refresh.clicked.connect(self.refresh_requested.emit)
             layout.addWidget(self.btn_refresh)
 
@@ -757,6 +806,7 @@ if _PYSIDE6_AVAILABLE:
             ):
                 value = QLabel("Unknown")
                 value.setAccessibleName(f"Device {label.rstrip(':')}")
+                _set_help(value, f"The current device {label.rstrip(':').lower()} value.")
                 self.labels[key] = value
                 form.addRow(label, value)
             layout.addWidget(group)
@@ -785,49 +835,60 @@ if _PYSIDE6_AVAILABLE:
             form = QFormLayout(group)
 
             self.combo_buzzer = self._combo(["ON", "OFF"], "Buzzer Mode")
-            form.addRow("Buzzer:", self.combo_buzzer)
+            form.addRow(_label("&Buzzer:", self.combo_buzzer), self.combo_buzzer)
             self.combo_avr = self._combo(["OFF", "STANDARD", "SENSITIVE"], "AVR Mode")
-            form.addRow("AVR:", self.combo_avr)
+            form.addRow(_label("&AVR:", self.combo_avr), self.combo_avr)
             self.combo_feedback = self._combo(["ON", "OFF"], "Feedback Mode")
-            form.addRow("Feedback:", self.combo_feedback)
+            form.addRow(_label("&Feedback:", self.combo_feedback), self.combo_feedback)
             self.combo_linefeed = self._combo(["ON", "OFF"], "Linefeed Mode")
-            form.addRow("Linefeed:", self.combo_linefeed)
+            form.addRow(_label("&Linefeed:", self.combo_linefeed), self.combo_linefeed)
             self.combo_brightness = self._combo(["100", "075", "050", "025"], "Brightness")
-            form.addRow("Brightness:", self.combo_brightness)
+            form.addRow(_label("B&rightness:", self.combo_brightness), self.combo_brightness)
             self.combo_scroll = self._combo(["5SEC", "10SEC", "OFF"], "Scroll Mode")
-            form.addRow("Scroll:", self.combo_scroll)
+            form.addRow(_label("&Scroll:", self.combo_scroll), self.combo_scroll)
             self.combo_sleep = self._combo(["30SEC", "60SEC", "OFF"], "Sleep Mode")
-            form.addRow("Sleep:", self.combo_sleep)
+            form.addRow(_label("Slee&p:", self.combo_sleep), self.combo_sleep)
             self.combo_normalvolt = self._combo(["220", "230", "240"], "Normal Voltage")
-            form.addRow("Normal Voltage:", self.combo_normalvolt)
+            form.addRow(_label("&Normal Voltage:", self.combo_normalvolt), self.combo_normalvolt)
 
             self.spin_bthresh3 = QSpinBox()
             self.spin_bthresh3.setAccessibleName("Bank 3 Battery Threshold")
             self.spin_bthresh3.setRange(20, 100)
             self.spin_bthresh3.setSingleStep(10)
-            form.addRow("Bank 3 Battery Threshold:", self.spin_bthresh3)
+            _set_help(self.spin_bthresh3, "Battery threshold percentage for outlet bank 3.")
+            form.addRow(
+                _label("Bank &3 Battery Threshold:", self.spin_bthresh3),
+                self.spin_bthresh3,
+            )
 
             self.spin_bthresh4 = QSpinBox()
             self.spin_bthresh4.setAccessibleName("Bank 4 Battery Threshold")
             self.spin_bthresh4.setRange(20, 100)
             self.spin_bthresh4.setSingleStep(10)
-            form.addRow("Bank 4 Battery Threshold:", self.spin_bthresh4)
+            _set_help(self.spin_bthresh4, "Battery threshold percentage for outlet bank 4.")
+            form.addRow(
+                _label("Bank &4 Battery Threshold:", self.spin_bthresh4),
+                self.spin_bthresh4,
+            )
 
             layout.addWidget(group)
 
             buttons = QHBoxLayout()
-            self.btn_load = QPushButton("Load from Device")
+            self.btn_load = QPushButton("&Load from Device")
             self.btn_load.setAccessibleName("Load Device Configuration")
+            _set_help(self.btn_load, "Load device configuration values from the connected UPS.")
             self.btn_load.clicked.connect(self.load_requested.emit)
             buttons.addWidget(self.btn_load)
 
-            self.btn_apply = QPushButton("Apply to Device")
+            self.btn_apply = QPushButton("&Apply to Device")
             self.btn_apply.setAccessibleName("Apply Device Configuration")
+            _set_help(self.btn_apply, "Apply these configuration values to the connected UPS.")
             self.btn_apply.clicked.connect(self._emit_apply)
             buttons.addWidget(self.btn_apply)
 
-            self.btn_reset = QPushButton("Factory Reset Device")
+            self.btn_reset = QPushButton("Factory &Reset Device")
             self.btn_reset.setAccessibleName("Factory Reset Device")
+            _set_help(self.btn_reset, "Reset the connected UPS configuration to factory defaults.")
             self.btn_reset.clicked.connect(self.reset_requested.emit)
             buttons.addWidget(self.btn_reset)
             buttons.addStretch()
@@ -837,6 +898,7 @@ if _PYSIDE6_AVAILABLE:
         def _combo(self, values: list[str], accessible_name: str) -> QComboBox:
             combo = QComboBox()
             combo.setAccessibleName(accessible_name)
+            _set_help(combo, f"Select the {accessible_name.lower()} setting.")
             for value in values:
                 combo.addItem(value, value)
             return combo
@@ -908,7 +970,7 @@ if _PYSIDE6_AVAILABLE:
         def __init__(self) -> None:
             super().__init__()
             self.setWindowTitle("Juicer — Furman F1500-UPS E Controller")
-            self.setMinimumSize(700, 550)
+            self._resize_to_content_on_show = True
 
             # State
             self._transport: Any = None
@@ -927,26 +989,30 @@ if _PYSIDE6_AVAILABLE:
             # Tab widget
             self.tabs = QTabWidget()
             self.tabs.setAccessibleName("Main Tab Navigation")
+            _set_help(self.tabs, "Choose which Juicer controls to display.")
             central_layout.addWidget(self.tabs)
 
             # Bottom button row
             btn_row = QHBoxLayout()
             btn_row.setContentsMargins(0, 0, 0, 0)
 
-            self.btn_save = QPushButton("Save Settings")
+            self.btn_save = QPushButton("&Save Settings")
             self.btn_save.setAccessibleName("Save Settings")
+            _set_help(self.btn_save, "Save the current configuration settings.")
             self.btn_save.clicked.connect(self._on_save_settings)
             btn_row.addWidget(self.btn_save)
 
-            self.btn_reset = QPushButton("Reset to Defaults")
+            self.btn_reset = QPushButton("&Reset to Defaults")
             self.btn_reset.setAccessibleName("Reset to Defaults")
+            _set_help(self.btn_reset, "Reset the configuration fields to their default values.")
             self.btn_reset.clicked.connect(self._on_reset_defaults)
             btn_row.addWidget(self.btn_reset)
 
             btn_row.addStretch()
 
-            self.btn_close = QPushButton("Close")
+            self.btn_close = QPushButton("&Close")
             self.btn_close.setAccessibleName("Close Window")
+            _set_help(self.btn_close, "Close the Juicer GUI.")
             self.btn_close.clicked.connect(self.close)
             btn_row.addWidget(self.btn_close)
 
@@ -971,18 +1037,19 @@ if _PYSIDE6_AVAILABLE:
             overview_layout.addWidget(self.overview)
             overview_layout.addStretch()
 
-            self.tabs.addTab(self.overview_tab, "Overview")
-            self.tabs.addTab(self.manual_controls, "Manual Control")
-            self.tabs.addTab(self.boot_editor, "Boot Sequence")
-            self.tabs.addTab(self.shutdown_editor, "Shutdown Sequence")
-            self.tabs.addTab(self.device_status, "Device Status")
-            self.tabs.addTab(self.device_config, "Device Config")
-            self.tabs.addTab(self.service_panel, "Service")
-            self.tabs.addTab(self.import_export, "Import/Export")
-            self.tabs.addTab(self.log_viewer, "Log")
+            self.tabs.addTab(self.overview_tab, "&Overview")
+            self.tabs.addTab(self.manual_controls, "&Manual Control")
+            self.tabs.addTab(self.boot_editor, "&Boot Sequence")
+            self.tabs.addTab(self.shutdown_editor, "S&hutdown Sequence")
+            self.tabs.addTab(self.device_status, "&Device Status")
+            self.tabs.addTab(self.device_config, "Device &Config")
+            self.tabs.addTab(self.service_panel, "&Service")
+            self.tabs.addTab(self.import_export, "&Import/Export")
+            self.tabs.addTab(self.log_viewer, "&Log")
 
             # Status bar
             self.status_bar = QStatusBar()
+            _set_help(self.status_bar, "Shows the latest Juicer GUI status message.")
             self.setStatusBar(self.status_bar)
             self.status_bar.showMessage("Ready")
 
@@ -1011,9 +1078,34 @@ if _PYSIDE6_AVAILABLE:
             logging.getLogger("juicer").addHandler(self._log_handler)
             logging.getLogger("juicer").setLevel(logging.DEBUG)
 
+            self._fill_missing_tooltips()
+
             # Load default config
             self._load_config()
             self._connect_to_saved_port_if_available()
+
+        def _fill_missing_tooltips(self) -> None:
+            """Use accessible names as fallback tooltip help for any remaining controls."""
+            for widget in self.findChildren(QWidget):
+                if not widget.toolTip():
+                    accessible_name = widget.accessibleName()
+                    if accessible_name:
+                        _set_help(widget, accessible_name)
+
+        def showEvent(self, event: Any) -> None:
+            """Resize the main window to its content the first time it is shown."""
+            super().showEvent(event)
+            if not self._resize_to_content_on_show:
+                return
+            self._resize_to_content_on_show = False
+            self.adjustSize()
+            screen = self.screen() or QApplication.primaryScreen()
+            if screen is not None:
+                available = screen.availableGeometry()
+                self.resize(
+                    min(self.width(), available.width()),
+                    min(self.height(), available.height()),
+                )
 
         @Slot()
         def _on_save_settings(self) -> None:
