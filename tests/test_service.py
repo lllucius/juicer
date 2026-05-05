@@ -66,8 +66,12 @@ def test_svc_do_run_reports_running_only_after_boot_completion() -> None:
     holder: dict[str, object] = {}
     boot_completed = False
 
-    def boot(progress_callback: Callable[[], None] | None = None) -> None:
+    def boot(
+        progress_callback: Callable[[], None] | None = None,
+        cancel: object | None = None,
+    ) -> None:
         nonlocal boot_completed
+        assert cancel is not None
         service = holder["service"]
         assert win32service.SERVICE_RUNNING not in [status for status, _ in service.statuses]
         assert progress_callback is not None
@@ -129,7 +133,7 @@ def test_run_boot_sequence_closes_transport_when_progress_callback_after_open_fa
         if progress_calls == 2:
             raise RuntimeError("startup status failed")
 
-    monkeypatch.setattr(config_module, "WindowsRegistryStore", FakeStore)
+    monkeypatch.setattr(config_module, "TomlStore", FakeStore)
     monkeypatch.setattr(protocol_module, "SerialTransport", FakeTransport)
     monkeypatch.setattr(protocol_module, "JuicerClient", FakeClient)
 

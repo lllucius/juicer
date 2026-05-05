@@ -14,7 +14,7 @@ import os
 import platform
 import site
 import sys
-from typing import Callable
+from typing import Callable, cast
 
 logger = logging.getLogger(__name__)
 
@@ -55,13 +55,27 @@ def _ensure_pywin32() -> None:
 ProgressCallback = Callable[[], None]
 
 
-def _run_boot_sequence(progress_callback: ProgressCallback | None = None) -> None:
-    """Load config from registry and run boot sequence."""
-    from juicer.config import WindowsRegistryStore
+class _Win32CancelToken:
+    """Cancellation token backed by a Win32 event handle."""
+
+    def __init__(self, event: object) -> None:
+        self._event = event
+
+    def is_set(self) -> bool:
+        _ensure_pywin32()
+        return cast(bool, win32event.WaitForSingleObject(self._event, 0) == 0)
+
+
+def _run_boot_sequence(
+    progress_callback: ProgressCallback | None = None,
+    cancel: _Win32CancelToken | None = None,
+) -> None:
+    """Load config from TOML and run boot sequence."""
+    from juicer.config import TomlStore
     from juicer.protocol import JuicerClient, SerialTransport
     from juicer.sequence import run_boot
 
-    store = WindowsRegistryStore()
+    store = TomlStore()
     config = store.load()
 
     transport = SerialTransport(port=config.port)
@@ -72,18 +86,18 @@ def _run_boot_sequence(progress_callback: ProgressCallback | None = None) -> Non
         if progress_callback is not None:
             progress_callback()
         client = JuicerClient(transport)
-        run_boot(config, client, progress_callback=progress_callback)
+        run_boot(config, client, progress_callback=progress_callback, cancel=cancel)
     finally:
         transport.close()
 
 
 def _run_shutdown_sequence() -> None:
-    """Load config from registry and run shutdown sequence."""
-    from juicer.config import WindowsRegistryStore
+    """Load config from TOML and run shutdown sequence."""
+    from juicer.config import TomlStore
     from juicer.protocol import JuicerClient, SerialTransport
     from juicer.sequence import run_shutdown
 
-    store = WindowsRegistryStore()
+    store = TomlStore()
     config = store.load()
 
     transport = SerialTransport(port=config.port)
@@ -140,10 +154,14 @@ if _PYWIN32_AVAILABLE:
                 servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Running boot sequence")
 
                 try:
-                    _run_boot_sequence(progress_callback=self._report_start_pending)
+                    _run_boot_sequence(
+                        progress_callback=self._report_start_pending,
+                        cancel=_Win32CancelToken(self.stop_event),
+                    )
                 except Exception as exc:
                     servicemanager.LogErrorMsg(f"{SERVICE_NAME}: Boot failed: {exc}")
                     logger.error("Boot sequence failed: %s", exc)
+                    return
 
                 self._reporting_start_pending = False
                 self.ReportServiceStatus(win32service.SERVICE_RUNNING)

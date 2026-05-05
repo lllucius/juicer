@@ -6,7 +6,7 @@ Panels:
   - Boot Sequence Editor: per-bank action/delay config
   - Shutdown Sequence Editor: same for shutdown
   - Service Panel: install/uninstall/start/stop with status
-  - Import/Export: JSON config import/export
+  - Import/Export: TOML config import/export
   - Log Viewer: scrolling log messages
 
 All controls have ``setAccessibleName()`` and proper labels.
@@ -16,27 +16,27 @@ Uses protocol/config/service APIs — never raw serial strings.
 
 from __future__ import annotations
 
+import ctypes
 import logging
 import platform
 import sys
 from functools import partial
-from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional, cast
 
 from juicer.config import (
     BankAction,
     BankConfig,
     ConfigStore,
     GlobalConfig,
-    JsonStore,
     SequenceConfig,
+    TomlStore,
 )
 
 logger = logging.getLogger(__name__)
 
 # Guard PySide6 import for environments where it's not installed
 try:
-    from PySide6.QtCore import QObject, Signal, Slot
+    from PySide6.QtCore import QObject, QThread, Signal, Slot
     from PySide6.QtWidgets import (
         QApplication,
         QComboBox,
@@ -410,7 +410,7 @@ if _PYSIDE6_AVAILABLE:
                 row_layout.addWidget(QLabel("Delay Before:"))
                 pre_spin = QSpinBox()
                 pre_spin.setAccessibleName(f"{label} Bank {i} Pre-Delay")
-                pre_spin.setRange(0, 60000)
+                pre_spin.setRange(0, 2_147_483_647)
                 pre_spin.setSuffix(" ms")
                 pre_spin.setSingleStep(100)
                 row_layout.addWidget(pre_spin)
@@ -419,7 +419,7 @@ if _PYSIDE6_AVAILABLE:
                 row_layout.addWidget(QLabel("Delay After:"))
                 post_spin = QSpinBox()
                 post_spin.setAccessibleName(f"{label} Bank {i} Post-Delay")
-                post_spin.setRange(0, 60000)
+                post_spin.setRange(0, 2_147_483_647)
                 post_spin.setSuffix(" ms")
                 post_spin.setSingleStep(100)
                 row_layout.addWidget(post_spin)
@@ -494,13 +494,13 @@ if _PYSIDE6_AVAILABLE:
         """Editor for the boot sequence (banks 1→4)."""
 
         def __init__(self, parent: Optional[QWidget] = None) -> None:
-            super().__init__("Boot", "Startup Sound", parent)
+            super().__init__("Boot", "Event Start Sound", parent)
 
     class ShutdownSequenceEditor(_SequenceEditorPanel):
         """Editor for the shutdown sequence (banks 4→1)."""
 
         def __init__(self, parent: Optional[QWidget] = None) -> None:
-            super().__init__("Shutdown", "Shutdown Sound", parent)
+            super().__init__("Shutdown", "Event End Sound", parent)
 
     class ServicePanel(QWidget):
         """Windows service management controls."""
@@ -610,7 +610,7 @@ if _PYSIDE6_AVAILABLE:
                 QMessageBox.warning(self, "Error", f"Stop failed: {exc}")
 
     class ImportExportPanel(QWidget):
-        """JSON configuration import and export."""
+        """TOML configuration import and export."""
 
         config_imported = Signal(object)  # GlobalConfig
 
@@ -624,8 +624,8 @@ if _PYSIDE6_AVAILABLE:
 
             # Export
             export_row = QHBoxLayout()
-            self.btn_export = QPushButton("Export to JSON…")
-            self.btn_export.setAccessibleName("Export Configuration to JSON File")
+            self.btn_export = QPushButton("Export to TOML…")
+            self.btn_export.setAccessibleName("Export Configuration to TOML File")
             self.btn_export.clicked.connect(self._export)
             export_row.addWidget(self.btn_export)
             export_row.addStretch()
@@ -633,8 +633,8 @@ if _PYSIDE6_AVAILABLE:
 
             # Import
             import_row = QHBoxLayout()
-            self.btn_import = QPushButton("Import from JSON…")
-            self.btn_import.setAccessibleName("Import Configuration from JSON File")
+            self.btn_import = QPushButton("Import from TOML…")
+            self.btn_import.setAccessibleName("Import Configuration from TOML File")
             self.btn_import.clicked.connect(self._import)
             import_row.addWidget(self.btn_import)
             import_row.addStretch()
@@ -644,36 +644,48 @@ if _PYSIDE6_AVAILABLE:
             layout.addStretch()
 
             self._current_config: GlobalConfig | None = None
+            self.current_config_provider: Callable[[], GlobalConfig] | None = None
 
         def set_config(self, config: GlobalConfig) -> None:
             self._current_config = config
 
         def _export(self) -> None:
-            if self._current_config is None:
+            try:
+                config = (
+                    self.current_config_provider()
+                    if self.current_config_provider is not None
+                    else self._current_config
+                )
+            except Exception as exc:
+                QMessageBox.warning(self, "Export", f"Current settings are invalid: {exc}")
+                return
+            if config is None:
                 QMessageBox.warning(self, "Export", "No configuration to export.")
                 return
             path, _ = QFileDialog.getSaveFileName(
-                self, "Export Configuration", "juicer_config.json", "JSON Files (*.json)"
+                self, "Export Configuration", "juicer_config.toml", "TOML Files (*.toml)"
             )
             if path:
                 try:
-                    store = JsonStore(path)
-                    store.save(self._current_config)
+                    store = TomlStore(path)
+                    store.save(config)
                     QMessageBox.information(self, "Export", f"Configuration exported to {path}")
                 except Exception as exc:
                     QMessageBox.warning(self, "Error", f"Export failed: {exc}")
 
         def _import(self) -> None:
             path, _ = QFileDialog.getOpenFileName(
-                self, "Import Configuration", "", "JSON Files (*.json);;All Files (*)"
+                self, "Import Configuration", "", "TOML Files (*.toml);;All Files (*)"
             )
             if path:
                 try:
-                    store = JsonStore(path)
+                    store = TomlStore(path)
                     config = store.load()
                     self.config_imported.emit(config)
                     QMessageBox.information(
-                        self, "Import", f"Configuration imported from {path}"
+                        self,
+                        "Import",
+                        f"Configuration imported from {path}.\nClick Save Settings to persist it.",
                     )
                 except Exception as exc:
                     QMessageBox.warning(self, "Error", f"Import failed: {exc}")
@@ -711,6 +723,177 @@ if _PYSIDE6_AVAILABLE:
         def _clear(self) -> None:
             self.text_log.clear()
 
+    class DeviceStatusPanel(QWidget):
+        """Detailed device status queries."""
+
+        refresh_requested = Signal()
+
+        def __init__(self, parent: Optional[QWidget] = None) -> None:
+            super().__init__(parent)
+            layout = QVBoxLayout(self)
+
+            self.btn_refresh = QPushButton("Refresh Device Status")
+            self.btn_refresh.setAccessibleName("Refresh Device Status")
+            self.btn_refresh.clicked.connect(self.refresh_requested.emit)
+            layout.addWidget(self.btn_refresh)
+
+            group = QGroupBox("Device Status")
+            form = QFormLayout(group)
+            self.labels: dict[str, QLabel] = {}
+            for key, label in (
+                ("id", "ID:"),
+                ("power", "Power:"),
+                ("metrics", "Power Metrics:"),
+                ("current", "Current:"),
+                ("voltage", "Voltage:"),
+                ("load", "Load:"),
+                ("battery", "Battery:"),
+                ("battery_state", "Battery State:"),
+                ("backup_time", "Backup Time:"),
+            ):
+                value = QLabel("Unknown")
+                value.setAccessibleName(f"Device {label.rstrip(':')}")
+                self.labels[key] = value
+                form.addRow(label, value)
+            layout.addWidget(group)
+            layout.addStretch()
+
+        def set_enabled(self, enabled: bool) -> None:
+            self.btn_refresh.setEnabled(enabled)
+
+        def apply_status(self, status: dict[str, str]) -> None:
+            for key, value in status.items():
+                if key in self.labels:
+                    self.labels[key].setText(value)
+
+    class DeviceConfigPanel(QWidget):
+        """Device configuration commands exposed by the serial protocol."""
+
+        load_requested = Signal()
+        apply_requested = Signal(object)
+        reset_requested = Signal()
+
+        def __init__(self, parent: Optional[QWidget] = None) -> None:
+            super().__init__(parent)
+            layout = QVBoxLayout(self)
+
+            group = QGroupBox("Device Configuration")
+            form = QFormLayout(group)
+
+            self.combo_buzzer = self._combo(["ON", "OFF"], "Buzzer Mode")
+            form.addRow("Buzzer:", self.combo_buzzer)
+            self.combo_avr = self._combo(["OFF", "STANDARD", "SENSITIVE"], "AVR Mode")
+            form.addRow("AVR:", self.combo_avr)
+            self.combo_feedback = self._combo(["ON", "OFF"], "Feedback Mode")
+            form.addRow("Feedback:", self.combo_feedback)
+            self.combo_linefeed = self._combo(["ON", "OFF"], "Linefeed Mode")
+            form.addRow("Linefeed:", self.combo_linefeed)
+            self.combo_brightness = self._combo(["100", "075", "050", "025"], "Brightness")
+            form.addRow("Brightness:", self.combo_brightness)
+            self.combo_scroll = self._combo(["5SEC", "10SEC", "OFF"], "Scroll Mode")
+            form.addRow("Scroll:", self.combo_scroll)
+            self.combo_sleep = self._combo(["30SEC", "60SEC", "OFF"], "Sleep Mode")
+            form.addRow("Sleep:", self.combo_sleep)
+            self.combo_normalvolt = self._combo(["220", "230", "240"], "Normal Voltage")
+            form.addRow("Normal Voltage:", self.combo_normalvolt)
+
+            self.spin_bthresh3 = QSpinBox()
+            self.spin_bthresh3.setAccessibleName("Bank 3 Battery Threshold")
+            self.spin_bthresh3.setRange(20, 100)
+            self.spin_bthresh3.setSingleStep(10)
+            form.addRow("Bank 3 Battery Threshold:", self.spin_bthresh3)
+
+            self.spin_bthresh4 = QSpinBox()
+            self.spin_bthresh4.setAccessibleName("Bank 4 Battery Threshold")
+            self.spin_bthresh4.setRange(20, 100)
+            self.spin_bthresh4.setSingleStep(10)
+            form.addRow("Bank 4 Battery Threshold:", self.spin_bthresh4)
+
+            layout.addWidget(group)
+
+            buttons = QHBoxLayout()
+            self.btn_load = QPushButton("Load from Device")
+            self.btn_load.setAccessibleName("Load Device Configuration")
+            self.btn_load.clicked.connect(self.load_requested.emit)
+            buttons.addWidget(self.btn_load)
+
+            self.btn_apply = QPushButton("Apply to Device")
+            self.btn_apply.setAccessibleName("Apply Device Configuration")
+            self.btn_apply.clicked.connect(self._emit_apply)
+            buttons.addWidget(self.btn_apply)
+
+            self.btn_reset = QPushButton("Factory Reset Device")
+            self.btn_reset.setAccessibleName("Factory Reset Device")
+            self.btn_reset.clicked.connect(self.reset_requested.emit)
+            buttons.addWidget(self.btn_reset)
+            buttons.addStretch()
+            layout.addLayout(buttons)
+            layout.addStretch()
+
+        def _combo(self, values: list[str], accessible_name: str) -> QComboBox:
+            combo = QComboBox()
+            combo.setAccessibleName(accessible_name)
+            for value in values:
+                combo.addItem(value, value)
+            return combo
+
+        def _emit_apply(self) -> None:
+            self.apply_requested.emit(self.current_values())
+
+        def set_enabled(self, enabled: bool) -> None:
+            for widget in (
+                self.combo_buzzer,
+                self.combo_avr,
+                self.combo_feedback,
+                self.combo_linefeed,
+                self.combo_brightness,
+                self.combo_scroll,
+                self.combo_sleep,
+                self.combo_normalvolt,
+                self.spin_bthresh3,
+                self.spin_bthresh4,
+                self.btn_load,
+                self.btn_apply,
+                self.btn_reset,
+            ):
+                widget.setEnabled(enabled)
+
+        def current_values(self) -> dict[str, object]:
+            return {
+                "buzzer": self.combo_buzzer.currentData(),
+                "avr": self.combo_avr.currentData(),
+                "feedback": self.combo_feedback.currentData(),
+                "linefeed": self.combo_linefeed.currentData(),
+                "brightness": self.combo_brightness.currentData(),
+                "scroll_mode": self.combo_scroll.currentData(),
+                "sleep_mode": self.combo_sleep.currentData(),
+                "normalvolt": self.combo_normalvolt.currentData(),
+                "bthresh3": self.spin_bthresh3.value(),
+                "bthresh4": self.spin_bthresh4.value(),
+            }
+
+        def apply_values(self, values: dict[str, object]) -> None:
+            mapping = {
+                "buzzer": self.combo_buzzer,
+                "avr": self.combo_avr,
+                "feedback": self.combo_feedback,
+                "linefeed": self.combo_linefeed,
+                "brightness": self.combo_brightness,
+                "scroll_mode": self.combo_scroll,
+                "sleep_mode": self.combo_sleep,
+                "normalvolt": self.combo_normalvolt,
+            }
+            for key, combo in mapping.items():
+                value = values.get(key)
+                if value is not None:
+                    idx = combo.findData(str(value))
+                    if idx >= 0:
+                        combo.setCurrentIndex(idx)
+            if isinstance(values.get("bthresh3"), int):
+                self.spin_bthresh3.setValue(cast(int, values["bthresh3"]))
+            if isinstance(values.get("bthresh4"), int):
+                self.spin_bthresh4.setValue(cast(int, values["bthresh4"]))
+
     # ──────────────────────────────────────────────────────────────────
     # Main Window
     # ──────────────────────────────────────────────────────────────────
@@ -727,6 +910,8 @@ if _PYSIDE6_AVAILABLE:
             self._transport: Any = None
             self._client: Any = None
             self._config = GlobalConfig()
+            self._busy = False
+            self._workers: list[tuple[Any, Any]] = []
 
             # Central widget with tabs + bottom button row
             central = QWidget()
@@ -769,6 +954,8 @@ if _PYSIDE6_AVAILABLE:
             self.manual_controls = ManualControlsPanel()
             self.boot_editor = BootSequenceEditor()
             self.shutdown_editor = ShutdownSequenceEditor()
+            self.device_status = DeviceStatusPanel()
+            self.device_config = DeviceConfigPanel()
             self.service_panel = ServicePanel()
             self.import_export = ImportExportPanel()
             self.log_viewer = LogViewer()
@@ -784,6 +971,8 @@ if _PYSIDE6_AVAILABLE:
             self.tabs.addTab(self.manual_controls, "Manual Control")
             self.tabs.addTab(self.boot_editor, "Boot Sequence")
             self.tabs.addTab(self.shutdown_editor, "Shutdown Sequence")
+            self.tabs.addTab(self.device_status, "Device Status")
+            self.tabs.addTab(self.device_config, "Device Config")
             self.tabs.addTab(self.service_panel, "Service")
             self.tabs.addTab(self.import_export, "Import/Export")
             self.tabs.addTab(self.log_viewer, "Log")
@@ -798,9 +987,16 @@ if _PYSIDE6_AVAILABLE:
             self.serial_settings.disconnect_requested.connect(self._disconnect_serial)
             self.manual_controls.command_requested.connect(self._handle_command)
             self.import_export.config_imported.connect(self._on_config_imported)
+            self.import_export.current_config_provider = self._config_from_widgets
+            self.device_status.refresh_requested.connect(self._refresh_status)
+            self.device_config.load_requested.connect(self._load_device_config)
+            self.device_config.apply_requested.connect(self._apply_device_config)
+            self.device_config.reset_requested.connect(self._reset_device_config)
 
             # Initial state
             self.manual_controls.set_enabled(False)
+            self.device_status.set_enabled(False)
+            self.device_config.set_enabled(False)
 
             # Set up logging handler
             self._log_handler = QtLogHandler()
@@ -818,8 +1014,9 @@ if _PYSIDE6_AVAILABLE:
         @Slot()
         def _on_save_settings(self) -> None:
             """Save current settings to config store."""
-            self._save_config()
-            self.status_bar.showMessage("Settings saved")
+            if self._save_config(show_errors=True):
+                self.status_bar.showMessage("Settings saved")
+                QMessageBox.information(self, "Settings", "Settings saved.")
 
         @Slot()
         def _on_reset_defaults(self) -> None:
@@ -838,23 +1035,17 @@ if _PYSIDE6_AVAILABLE:
         def _load_config(self) -> None:
             """Try to load configuration from the appropriate store."""
             try:
-                store: ConfigStore
-                if platform.system() == "Windows":
-                    from juicer.config import WindowsRegistryStore
-
-                    store = WindowsRegistryStore()
-                else:
-                    json_path = Path.home() / ".juicer" / "config.json"
-                    if not json_path.exists():
-                        logger.info("No config file found, using defaults")
-                        self._apply_config(self._config)
-                        return
-                    store = JsonStore(json_path)
+                store = TomlStore()
+                if not store.path.exists():
+                    logger.info("No config file found, using defaults")
+                    self._apply_config(self._config)
+                    return
                 self._config = store.load()
                 self._apply_config(self._config)
                 logger.info("Configuration loaded")
             except Exception as exc:
                 logger.warning("Could not load config: %s", exc)
+                QMessageBox.warning(self, "Configuration", f"Could not load config: {exc}")
                 self._apply_config(self._config)
 
         def _apply_config(self, config: GlobalConfig) -> None:
@@ -862,33 +1053,36 @@ if _PYSIDE6_AVAILABLE:
             self._config = config
             if config.port:
                 self.serial_settings.set_current_port(config.port)
-            self.boot_editor.set_sound(config.start_sound)
-            self.shutdown_editor.set_sound(config.stop_sound)
+            self.boot_editor.set_sound(config.event_start_sound)
+            self.shutdown_editor.set_sound(config.event_stop_sound)
             self.boot_editor.set_sequence_config(config.boot)
             self.shutdown_editor.set_sequence_config(config.shutdown)
             self.import_export.set_config(config)
 
-        def _save_config(self) -> None:
-            """Read editor widgets and save config."""
-            self._config.port = self.serial_settings.current_port()
-            self._config.start_sound = self.boot_editor.get_sound()
-            self._config.stop_sound = self.shutdown_editor.get_sound()
-            self._config.boot = self.boot_editor.get_sequence_config()
-            self._config.shutdown = self.shutdown_editor.get_sequence_config()
-            try:
-                store: ConfigStore
-                if platform.system() == "Windows":
-                    from juicer.config import WindowsRegistryStore
+        def _config_from_widgets(self) -> GlobalConfig:
+            """Build and validate config from current editor widgets."""
+            return GlobalConfig(
+                port=self.serial_settings.current_port(),
+                event_start_sound=self.boot_editor.get_sound(),
+                event_stop_sound=self.shutdown_editor.get_sound(),
+                boot=self.boot_editor.get_sequence_config(),
+                shutdown=self.shutdown_editor.get_sequence_config(),
+            )
 
-                    store = WindowsRegistryStore()
-                else:
-                    json_path = Path.home() / ".juicer" / "config.json"
-                    store = JsonStore(json_path)
+        def _save_config(self, *, show_errors: bool = False) -> bool:
+            """Read editor widgets and save config."""
+            try:
+                self._config = self._config_from_widgets()
+                store: ConfigStore = TomlStore()
                 store.save(self._config)
                 self.import_export.set_config(self._config)
                 logger.info("Configuration saved")
+                return True
             except Exception as exc:
                 logger.error("Failed to save config: %s", exc)
+                if show_errors:
+                    QMessageBox.warning(self, "Save Failed", f"Failed to save config: {exc}")
+                return False
 
         def _connect_to_saved_port_if_available(self) -> None:
             """Connect to the saved port on startup when it is present."""
@@ -904,27 +1098,174 @@ if _PYSIDE6_AVAILABLE:
                 return
             self._connect_serial(port)
 
+        def _set_busy(self, busy: bool) -> None:
+            self._busy = busy
+            connected = self._client is not None
+            self.serial_settings.setEnabled(not busy)
+            self.manual_controls.set_enabled(connected and not busy)
+            self.device_status.set_enabled(connected and not busy)
+            self.device_config.set_enabled(connected and not busy)
+
+        def _run_worker(
+            self,
+            func: Callable[[], object],
+            success: Callable[[object], None],
+            error: Callable[[str], None],
+            *,
+            busy_message: str,
+        ) -> None:
+            if self._busy:
+                QMessageBox.information(
+                    self, "Busy", "Another device operation is already running."
+                )
+                return
+            self._set_busy(True)
+            self.status_bar.showMessage(busy_message)
+            thread = QThread(self)
+            worker = _SerialWorker(func)
+            worker.moveToThread(thread)
+
+            def cleanup() -> None:
+                self._set_busy(False)
+                self._workers = [
+                    pair
+                    for pair in self._workers
+                    if pair[0] is not worker and pair[1] is not thread
+                ]
+                thread.quit()
+                thread.wait()
+                worker.deleteLater()
+                thread.deleteLater()
+
+            def on_finished(result: object) -> None:
+                try:
+                    success(result)
+                finally:
+                    cleanup()
+
+            def on_error(message: str) -> None:
+                try:
+                    error(message)
+                finally:
+                    cleanup()
+
+            thread.started.connect(worker.run)
+            worker.finished.connect(on_finished)
+            worker.error.connect(on_error)
+            self._workers.append((worker, thread))
+            thread.start()
+
+        def _collect_status(self, client: Any) -> dict[str, str]:
+            status: dict[str, str] = {}
+            try:
+                identity = client.query_id()
+                status["id"] = (
+                    f"{identity.manufacturer} {identity.model} ({identity.firmware})"
+                )
+            except Exception as exc:
+                status["id"] = f"Unavailable ({exc})"
+            try:
+                outlets = client.query_outlet_status()
+                for bank_num, state in outlets.banks.items():
+                    status[f"bank{bank_num}"] = state.value
+            except Exception as exc:
+                status["outlets_error"] = str(exc)
+            try:
+                pwr = client.query_power_status()
+                status["power"] = pwr.status.value
+            except Exception as exc:
+                status["power"] = f"Unavailable ({exc})"
+            try:
+                metrics = client.query_power()
+                status["metrics"] = (
+                    f"In {metrics.volts_in:g} V, Out {metrics.volts_out:g} V, "
+                    f"{metrics.watts:g} W"
+                )
+            except Exception as exc:
+                status["metrics"] = f"Unavailable ({exc})"
+            try:
+                current = client.query_current()
+                status["current"] = f"{current.amps:g} A"
+            except Exception as exc:
+                status["current"] = f"Unavailable ({exc})"
+            try:
+                voltage = client.query_voltage()
+                status["voltage"] = f"{voltage.volts:g} V"
+            except Exception as exc:
+                status["voltage"] = f"Unavailable ({exc})"
+            try:
+                load = client.query_loadstat()
+                status["load"] = f"{load.percent:g}%"
+            except Exception as exc:
+                status["load"] = f"Unavailable ({exc})"
+            try:
+                bat = client.query_battery_status()
+                status["battery"] = f"{bat.level}%"
+            except Exception as exc:
+                status["battery"] = f"Unavailable ({exc})"
+            try:
+                bat_state = client.query_battery_state()
+                status["battery_state"] = bat_state.state.value
+            except Exception as exc:
+                status["battery_state"] = f"Unavailable ({exc})"
+            try:
+                backup = client.query_backup_time()
+                status["backup_time"] = f"{backup.minutes} minutes"
+            except Exception as exc:
+                status["backup_time"] = f"Unavailable ({exc})"
+            return status
+
+        def _apply_status_result(self, status: dict[str, str]) -> None:
+            for bank in range(1, 5):
+                value = status.get(f"bank{bank}")
+                if value is not None:
+                    self.overview.set_bank_state(bank, value)
+            if "outlets_error" in status:
+                logger.warning("Could not read outlet status: %s", status["outlets_error"])
+                for bank in range(1, 5):
+                    self.overview.set_bank_state(bank, "Unavailable")
+            self.overview.set_power_status(status.get("power", "Unavailable"))
+            battery_text = status.get("battery", "Unavailable")
+            self.overview.lbl_battery.setText(battery_text)
+            self.device_status.apply_status(status)
+
         @Slot(str)
         def _connect_serial(self, port: str) -> None:
             """Open the serial transport and create a client."""
             from juicer.protocol import JuicerClient, SerialTransport
 
-            try:
-                self._transport = SerialTransport(port=port)
-                self._transport.open()
-                self._client = JuicerClient(self._transport)
+            def connect() -> object:
+                transport = SerialTransport(port=port)
+                transport.open()
+                client = JuicerClient(transport)
+                status = self._collect_status(client)
+                return transport, client, status
+
+            def success(result: object) -> None:
+                transport, client, status = cast(tuple[Any, Any, dict[str, str]], result)
+                self._transport = transport
+                self._client = client
                 self.serial_settings.set_connected(True)
                 self.manual_controls.set_enabled(True)
+                self.device_status.set_enabled(True)
+                self.device_config.set_enabled(True)
                 self.overview.set_connected(port)
                 self._config.port = port
                 self.status_bar.showMessage(f"Connected to {port}")
                 logger.info("Connected to %s", port)
+                self._apply_status_result(status)
 
-                # Attempt to read initial status
-                self._refresh_status()
-            except Exception as exc:
-                logger.error("Connection failed: %s", exc)
-                QMessageBox.warning(self, "Connection Error", str(exc))
+            def error(message: str) -> None:
+                logger.error("Connection failed: %s", message)
+                self.status_bar.showMessage("Connection failed")
+                QMessageBox.warning(self, "Connection Error", message)
+
+            self._run_worker(
+                connect,
+                success,
+                error,
+                busy_message=f"Connecting to {port}…",
+            )
 
         @Slot()
         def _disconnect_serial(self) -> None:
@@ -935,6 +1276,8 @@ if _PYSIDE6_AVAILABLE:
             self._client = None
             self.serial_settings.set_connected(False)
             self.manual_controls.set_enabled(False)
+            self.device_status.set_enabled(False)
+            self.device_config.set_enabled(False)
             self.overview.set_disconnected()
             self.status_bar.showMessage("Disconnected")
             logger.info("Disconnected")
@@ -943,24 +1286,21 @@ if _PYSIDE6_AVAILABLE:
             """Query the UPS for current bank/power/battery status."""
             if not self._client:
                 return
-            try:
-                outlets = self._client.query_outlet_status()
-                for bank_num, state in outlets.banks.items():
-                    self.overview.set_bank_state(bank_num, state.value)
-            except Exception as exc:
-                logger.warning("Could not read outlet status: %s", exc)
 
-            try:
-                pwr = self._client.query_power_status()
-                self.overview.set_power_status(pwr.status.value)
-            except Exception:
-                pass
+            def query() -> object:
+                return self._collect_status(self._client)
 
-            try:
-                bat = self._client.query_battery_status()
-                self.overview.set_battery_level(bat.level)
-            except Exception:
-                pass
+            def success(result: object) -> None:
+                status = cast(dict[str, str], result)
+                self._apply_status_result(status)
+                self.status_bar.showMessage("Status refreshed")
+
+            def error(message: str) -> None:
+                logger.warning("Could not refresh status: %s", message)
+                self.status_bar.showMessage("Status refresh failed")
+                QMessageBox.warning(self, "Status Error", message)
+
+            self._run_worker(query, success, error, busy_message="Refreshing status…")
 
         @Slot(str, object)
         def _handle_command(self, command: str, args: Any) -> None:
@@ -969,7 +1309,7 @@ if _PYSIDE6_AVAILABLE:
                 QMessageBox.warning(self, "Error", "Not connected to serial port")
                 return
 
-            try:
+            def execute() -> object:
                 if command == "all_on":
                     responses = self._client.all_on()
                     logger.info("ALL ON: %s", responses)
@@ -981,16 +1321,111 @@ if _PYSIDE6_AVAILABLE:
                     responses = self._client.switch(bank, state)
                     logger.info("SWITCH %d %s: %s", bank, state, responses)
                 else:
-                    logger.warning("Unknown command: %s", command)
-                    return
+                    raise ValueError(f"Unknown command: {command}")
+                return self._collect_status(self._client)
 
-                # Refresh status after command
-                self._refresh_status()
+            def success(result: object) -> None:
+                self._apply_status_result(cast(dict[str, str], result))
                 self.status_bar.showMessage(f"Command sent: {command}")
 
-            except Exception as exc:
-                logger.error("Command failed: %s", exc)
-                QMessageBox.warning(self, "Command Error", str(exc))
+            def error(message: str) -> None:
+                logger.error("Command failed: %s", message)
+                self.status_bar.showMessage("Command failed")
+                QMessageBox.warning(self, "Command Error", message)
+
+            self._run_worker(execute, success, error, busy_message=f"Sending {command}…")
+
+        @Slot()
+        def _load_device_config(self) -> None:
+            if not self._client:
+                QMessageBox.warning(self, "Error", "Not connected to serial port")
+                return
+
+            def load() -> object:
+                cfg = self._client.query_list_config()
+                values: dict[str, object] = {
+                    "buzzer": cfg.buzzer.value if cfg.buzzer else None,
+                    "avr": cfg.avr.value if cfg.avr else None,
+                    "feedback": cfg.feedback.value if cfg.feedback else None,
+                    "linefeed": cfg.linefeed.value if cfg.linefeed else None,
+                    "brightness": cfg.brightness.value if cfg.brightness else None,
+                    "scroll_mode": cfg.scroll_mode.value if cfg.scroll_mode else None,
+                    "sleep_mode": cfg.sleep_mode.value if cfg.sleep_mode else None,
+                    "normalvolt": cfg.normalvolt.value if cfg.normalvolt else None,
+                }
+                if cfg.bthresh is not None:
+                    values["bthresh3"] = cfg.bthresh
+                    values["bthresh4"] = cfg.bthresh
+                return values
+
+            def success(result: object) -> None:
+                self.device_config.apply_values(cast(dict[str, object], result))
+                self.status_bar.showMessage("Device configuration loaded")
+
+            def error(message: str) -> None:
+                logger.error("Device config load failed: %s", message)
+                QMessageBox.warning(self, "Device Config", f"Load failed: {message}")
+
+            self._run_worker(load, success, error, busy_message="Loading device configuration…")
+
+        @Slot(object)
+        def _apply_device_config(self, values_obj: object) -> None:
+            if not self._client:
+                QMessageBox.warning(self, "Error", "Not connected to serial port")
+                return
+            values = cast(dict[str, object], values_obj)
+
+            def apply() -> object:
+                self._client.set_buzzer(cast(str, values["buzzer"]))
+                self._client.set_avr(cast(str, values["avr"]))
+                self._client.set_feedback(cast(str, values["feedback"]))
+                self._client.set_linefeed(cast(str, values["linefeed"]))
+                self._client.set_bright(cast(str, values["brightness"]))
+                self._client.set_scrollmode(cast(str, values["scroll_mode"]))
+                self._client.set_sleepmode(cast(str, values["sleep_mode"]))
+                self._client.set_normalvolt(cast(str, values["normalvolt"]))
+                self._client.set_batthresh(3, cast(int, values["bthresh3"]))
+                self._client.set_batthresh(4, cast(int, values["bthresh4"]))
+                return self._collect_status(self._client)
+
+            def success(result: object) -> None:
+                self._apply_status_result(cast(dict[str, str], result))
+                self.status_bar.showMessage("Device configuration applied")
+
+            def error(message: str) -> None:
+                logger.error("Device config apply failed: %s", message)
+                QMessageBox.warning(self, "Device Config", f"Apply failed: {message}")
+
+            self._run_worker(apply, success, error, busy_message="Applying device configuration…")
+
+        @Slot()
+        def _reset_device_config(self) -> None:
+            if not self._client:
+                QMessageBox.warning(self, "Error", "Not connected to serial port")
+                return
+            reply = QMessageBox.question(
+                self,
+                "Factory Reset Device",
+                "Reset all device configuration settings to factory defaults?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+            def reset() -> object:
+                self._client.reset_all()
+                return self._collect_status(self._client)
+
+            def success(result: object) -> None:
+                self._apply_status_result(cast(dict[str, str], result))
+                self.status_bar.showMessage("Device reset complete")
+
+            def error(message: str) -> None:
+                logger.error("Device reset failed: %s", message)
+                QMessageBox.warning(self, "Device Config", f"Reset failed: {message}")
+
+            self._run_worker(reset, success, error, busy_message="Resetting device…")
 
         @Slot(object)
         def _on_config_imported(self, config: object) -> None:
@@ -1001,7 +1436,17 @@ if _PYSIDE6_AVAILABLE:
 
         def closeEvent(self, event: Any) -> None:
             """Clean up on window close."""
-            self._save_config()
+            if not self._save_config(show_errors=True):
+                reply = QMessageBox.question(
+                    self,
+                    "Save Failed",
+                    "Settings could not be saved. Close anyway?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    event.ignore()
+                    return
             self._disconnect_serial()
             super().closeEvent(event)
 
@@ -1014,6 +1459,17 @@ if _PYSIDE6_AVAILABLE:
 def main() -> None:
     """Launch the Juicer GUI application."""
     if not _PYSIDE6_AVAILABLE:
+        if platform.system() == "Windows":
+            try:
+                user32 = getattr(ctypes, "windll").user32
+                user32.MessageBoxW(
+                    None,
+                    "PySide6 is required for the GUI: pip install PySide6",
+                    "Juicer GUI",
+                    0x10,
+                )
+            except Exception:
+                pass
         print("PySide6 is required for the GUI: pip install PySide6", file=sys.stderr)
         sys.exit(1)
 
