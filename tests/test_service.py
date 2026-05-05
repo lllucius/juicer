@@ -257,3 +257,47 @@ def test_install_service_falls_back_to_pywin32_default_when_pythonservice_not_fo
     service_module.install_service()
 
     assert "exeName" not in installed_kwargs
+
+
+def test_service_management_requests_elevation_when_not_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service_module = _import_service_with_fake_pywin32()
+    requested: list[str] = []
+
+    def fail_install(**kwargs: object) -> None:
+        raise AssertionError("InstallService should be delegated to an elevated process")
+
+    monkeypatch.setattr(service_module, "_is_user_admin", lambda: False)
+    monkeypatch.setattr(
+        service_module,
+        "_request_elevated_service_command",
+        lambda command: requested.append(command),
+    )
+    monkeypatch.setattr(service_module.win32serviceutil, "InstallService", fail_install)
+
+    service_module.install_service()
+
+    assert requested == ["install"]
+
+
+def test_service_management_can_skip_elevation_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service_module = _import_service_with_fake_pywin32()
+    installed_kwargs: dict[str, object] = {}
+
+    def install_service(**kwargs: object) -> None:
+        installed_kwargs.update(kwargs)
+
+    monkeypatch.setattr(service_module, "_is_user_admin", lambda: False)
+    monkeypatch.setattr(
+        service_module,
+        "_request_elevated_service_command",
+        lambda command: (_ for _ in ()).throw(AssertionError("unexpected elevation request")),
+    )
+    monkeypatch.setattr(service_module.win32serviceutil, "InstallService", install_service)
+
+    service_module.install_service(elevate=False)
+
+    assert installed_kwargs["serviceName"] == service_module.SERVICE_NAME

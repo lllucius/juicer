@@ -306,8 +306,9 @@ juicer service install
 juicer service start
 ```
 
-> **Note**: service installation requires an **elevated (Administrator)**
-> command prompt.
+> **Note**: service install, uninstall, start, and stop operations require
+> **Administrator** privileges. On Windows, the CLI and GUI request elevation
+> automatically when needed.
 >
 > The service runs under the installed Python environment through pywin32's
 > native `pythonservice.exe` host. Keep Python, pywin32, and Juicer installed on
