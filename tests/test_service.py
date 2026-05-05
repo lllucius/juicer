@@ -308,3 +308,19 @@ def test_service_management_can_skip_elevation_request(
     service_module.install_service(elevate=False)
 
     assert installed_kwargs["serviceName"] == service_module.SERVICE_NAME
+
+
+def test_elevated_service_command_dispatches_without_requesting_elevation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service_module = _import_service_with_fake_pywin32()
+    calls: list[bool] = []
+
+    def install_service(*, elevate: bool = True) -> None:
+        calls.append(elevate)
+
+    monkeypatch.setattr(service_module, "install_service", install_service)
+
+    service_module._run_service_command_without_elevation("install")
+
+    assert calls == [False]
