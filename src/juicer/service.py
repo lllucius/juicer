@@ -129,13 +129,13 @@ def _request_elevated_service_command(command: ServiceCommand) -> None:
     sei.nShow = SW_SHOWNORMAL
 
     if not shell_execute_ex(ctypes.byref(sei)):
-        raise ctypes.WinError()
+        raise OSError("Windows elevation request was cancelled or failed")
 
     try:
         kernel32.WaitForSingleObject(sei.hProcess, INFINITE)
         exit_code = ctypes.c_ulong()
         if not kernel32.GetExitCodeProcess(sei.hProcess, ctypes.byref(exit_code)):
-            raise ctypes.WinError()
+            raise OSError("Unable to read elevated process exit code")
         if exit_code.value != 0:
             raise OSError(f"Elevated service {command} failed with exit code {exit_code.value}")
     finally:
