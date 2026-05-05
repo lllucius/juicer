@@ -188,7 +188,3 @@ def dump_config_toml(config: GlobalConfig) -> str:
     lines.extend(_sequence_to_toml("shutdown", config.shutdown))
     lines.append("")
     return "\n".join(lines)
-
-
-# Backwards-compatible alias for callers still using the previous JSON name.
-JsonStore = TomlStore
