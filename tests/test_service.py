@@ -102,6 +102,7 @@ def test_svc_do_run_reports_running_only_after_boot_completion() -> None:
 
 def test_run_boot_sequence_closes_transport_when_progress_callback_after_open_fails(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     import juicer.config as config_module
     import juicer.protocol as protocol_module

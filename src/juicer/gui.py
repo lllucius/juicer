@@ -419,7 +419,10 @@ if _PYSIDE6_AVAILABLE:
             sound_form = QFormLayout(sound_group)
             self.edit_sound = QLineEdit()
             self.edit_sound.setAccessibleName(f"{sound_label} Path")
-            _set_help(self.edit_sound, f"Path to the WAV file to play for the {sound_label.lower()}.")
+            _set_help(
+                self.edit_sound,
+                f"Path to the WAV file to play for the {sound_label.lower()}.",
+            )
             sound_browse_row = self._path_row(self.edit_sound, f"Browse {sound_label}")
             sound_form.addRow(_label(f"{sound_label} &Path:", self.edit_sound), sound_browse_row)
             layout.addWidget(sound_group)
@@ -853,14 +856,20 @@ if _PYSIDE6_AVAILABLE:
             self.spin_bthresh3.setRange(20, 100)
             self.spin_bthresh3.setSingleStep(10)
             _set_help(self.spin_bthresh3, "Battery threshold percentage for outlet bank 3.")
-            form.addRow(_label("Bank &3 Battery Threshold:", self.spin_bthresh3), self.spin_bthresh3)
+            form.addRow(
+                _label("Bank &3 Battery Threshold:", self.spin_bthresh3),
+                self.spin_bthresh3,
+            )
 
             self.spin_bthresh4 = QSpinBox()
             self.spin_bthresh4.setAccessibleName("Bank 4 Battery Threshold")
             self.spin_bthresh4.setRange(20, 100)
             self.spin_bthresh4.setSingleStep(10)
             _set_help(self.spin_bthresh4, "Battery threshold percentage for outlet bank 4.")
-            form.addRow(_label("Bank &4 Battery Threshold:", self.spin_bthresh4), self.spin_bthresh4)
+            form.addRow(
+                _label("Bank &4 Battery Threshold:", self.spin_bthresh4),
+                self.spin_bthresh4,
+            )
 
             layout.addWidget(group)
 
