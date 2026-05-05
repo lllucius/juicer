@@ -19,7 +19,7 @@ import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Literal, cast
+from typing import Any, Callable, Literal, cast, get_args
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,8 @@ def _ensure_pywin32() -> None:
 
 ProgressCallback = Callable[[], None]
 ServiceCommand = Literal["install", "uninstall", "start", "stop", "restart"]
-_SERVICE_COMMANDS: frozenset[str] = frozenset(("install", "uninstall", "start", "stop", "restart"))
+ServiceCommandHandler = Callable[..., None]
+_SERVICE_COMMANDS: frozenset[str] = frozenset(str(command) for command in get_args(ServiceCommand))
 
 
 def _windows_dll(name: str) -> Any | None:
@@ -477,16 +478,14 @@ def _run_service_command_without_elevation(command: str) -> None:
     if command not in _SERVICE_COMMANDS:
         raise SystemExit(f"Unsupported service command: {command}")
     service_command = cast(ServiceCommand, command)
-    if service_command == "install":
-        install_service(elevate=False)
-    elif service_command == "uninstall":
-        uninstall_service(elevate=False)
-    elif service_command == "start":
-        start_service(elevate=False)
-    elif service_command == "stop":
-        stop_service(elevate=False)
-    elif service_command == "restart":
-        restart_service(elevate=False)
+    handlers: dict[ServiceCommand, ServiceCommandHandler] = {
+        "install": install_service,
+        "uninstall": uninstall_service,
+        "start": start_service,
+        "stop": stop_service,
+        "restart": restart_service,
+    }
+    handlers[service_command](elevate=False)
 
 
 def main() -> None:
