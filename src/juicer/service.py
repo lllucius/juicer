@@ -319,6 +319,9 @@ if _PYWIN32_AVAILABLE:
                 self._reporting_start_pending = False
 
                 # Only report RUNNING if stop has not already been requested.
+                # A zero-timeout poll is the standard Win32 pattern for a
+                # non-blocking event check: WAIT_OBJECT_0 (0) means the event
+                # is already signalled (i.e. SvcStop was called during boot).
                 if win32event.WaitForSingleObject(self.stop_event, 0) == win32event.WAIT_OBJECT_0:
                     return
 

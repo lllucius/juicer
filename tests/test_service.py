@@ -30,7 +30,7 @@ def _import_service_with_fake_pywin32() -> types.ModuleType:
         # Return WAIT_TIMEOUT (258) for an instant poll (timeout == 0) so the
         # service treats the stop event as not yet signalled, and WAIT_OBJECT_0
         # (0) for an indefinite wait so SvcDoRun unblocks after boot.
-        WaitForSingleObject=lambda event, timeout: 0 if timeout != 0 else 258,
+        WaitForSingleObject=lambda event, timeout: 258 if timeout == 0 else 0,
         SetEvent=lambda event: None,
         INFINITE=-1,
         WAIT_OBJECT_0=0,
