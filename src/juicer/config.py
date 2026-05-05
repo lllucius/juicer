@@ -77,6 +77,7 @@ class GlobalConfig(BaseModel):
     @field_validator("port")
     @classmethod
     def _strip_port(cls, v: str) -> str:
+        """Trim surrounding whitespace from configured serial port names."""
         return v.strip()
 
 
@@ -96,6 +97,7 @@ class TomlStore(ConfigStore):
     """Read/write configuration as a TOML file."""
 
     def __init__(self, path: str | Path | None = None) -> None:
+        """Initialize the store with an explicit or platform-default config path."""
         self.path = Path(path) if path is not None else default_config_path()
 
     def load(self) -> GlobalConfig:
@@ -160,6 +162,7 @@ def _quote_toml_string(value: str) -> str:
 
 
 def _format_toml_value(value: str | int | bool) -> str:
+    """Render a primitive Python value using TOML literal syntax."""
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int):
@@ -168,6 +171,7 @@ def _format_toml_value(value: str | int | bool) -> str:
 
 
 def _bank_to_toml(name: str, cfg: BankConfig) -> list[str]:
+    """Serialize one bank section into TOML lines."""
     lines = [f"[{name}]"]
     if cfg.action is not None:
         lines.append(f"action = {cfg.action.value}")
@@ -177,6 +181,7 @@ def _bank_to_toml(name: str, cfg: BankConfig) -> list[str]:
 
 
 def _sequence_to_toml(name: str, seq: SequenceConfig) -> list[str]:
+    """Serialize all bank sections for one named sequence."""
     lines: list[str] = []
     for bank in range(1, NUM_BANKS + 1):
         if lines:
@@ -186,6 +191,7 @@ def _sequence_to_toml(name: str, seq: SequenceConfig) -> list[str]:
 
 
 def dump_config_toml(config: GlobalConfig) -> str:
+    """Serialize a validated configuration model into Juicer's TOML layout."""
     lines = [
         f"port = {_format_toml_value(config.port)}",
         f"event_start_sound = {_format_toml_value(config.event_start_sound)}",

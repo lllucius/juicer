@@ -78,27 +78,37 @@ class PowerStatus(str, enum.Enum):
 
 
 class BuzzerMode(str, enum.Enum):
+    """Audible alarm enable/disable setting."""
+
     ON = "ON"
     OFF = "OFF"
 
 
 class AVRMode(str, enum.Enum):
+    """Automatic voltage regulation sensitivity modes."""
+
     OFF = "OFF"
     STANDARD = "STANDARD"
     SENSITIVE = "SENSITIVE"
 
 
 class FeedbackMode(str, enum.Enum):
+    """Device command feedback verbosity mode."""
+
     ON = "ON"
     OFF = "OFF"
 
 
 class LinefeedMode(str, enum.Enum):
+    """Whether responses append an LF after the required CR terminator."""
+
     ON = "ON"
     OFF = "OFF"
 
 
 class Brightness(str, enum.Enum):
+    """Front-panel display brightness levels expressed as protocol strings."""
+
     B100 = "100"
     B075 = "075"
     B050 = "050"
@@ -106,35 +116,47 @@ class Brightness(str, enum.Enum):
 
 
 class ScrollMode(str, enum.Enum):
+    """Front-panel information scroll timing."""
+
     SEC5 = "5SEC"
     SEC10 = "10SEC"
     OFF = "OFF"
 
 
 class SleepMode(str, enum.Enum):
+    """Front-panel display sleep timing."""
+
     SEC30 = "30SEC"
     SEC60 = "60SEC"
     OFF = "OFF"
 
 
 class NormalVolt(str, enum.Enum):
+    """Nominal mains voltage configuration reported by the UPS."""
+
     V220 = "220"
     V230 = "230"
     V240 = "240"
 
 
 class AVRState(str, enum.Enum):
+    """Active AVR correction direction when regulation is engaged."""
+
     BOOST = "BOOST"
     BUCK = "BUCK"
 
 
 class BatteryChargeState(str, enum.Enum):
+    """Current battery charging direction or fully charged state."""
+
     CHARGE = "CHARGE"
     DISCHARGE = "DISCHARGE"
     FULL = "FULL"
 
 
 class ButtonState(str, enum.Enum):
+    """Front-panel power button enabled/disabled state."""
+
     ON = "ON"
     OFF = "OFF"
 
@@ -694,10 +716,12 @@ class Transport(abc.ABC):
         """Whether the connection is currently open."""
 
     def __enter__(self) -> "Transport":
+        """Open the transport and return it for ``with``-statement use."""
         self.open()
         return self
 
     def __exit__(self, *exc: Any) -> None:
+        """Close the transport when leaving a ``with`` block."""
         self.close()
 
 
@@ -711,6 +735,7 @@ class SerialTransport(Transport):
         retries: int = 50,
         retry_delay: float = 0.1,
     ) -> None:
+        """Store connection parameters and retry policy for a serial port session."""
         self.port = port
         self.baudrate = baudrate
         self.retries = retries
@@ -745,6 +770,7 @@ class SerialTransport(Transport):
         )
 
     def close(self) -> None:
+        """Close the serial handle and discard any buffered unread byte."""
         if self._serial and self._serial.is_open:
             self._serial.close()
             logger.info("Closed serial port %s", self.port)
@@ -752,6 +778,7 @@ class SerialTransport(Transport):
         self._pending_byte = b""
 
     def write(self, data: str) -> None:
+        """Write an ASCII command to the open serial port."""
         if not self._serial or not self._serial.is_open:
             raise TransportError("Serial port not open")
         self._serial.write(data.encode("ascii"))
@@ -781,6 +808,7 @@ class SerialTransport(Transport):
 
     @property
     def is_open(self) -> bool:
+        """Report whether the underlying pyserial handle is currently open."""
         return self._serial is not None and self._serial.is_open
 
 
@@ -797,22 +825,27 @@ class FakeTransport(Transport):
     """
 
     def __init__(self) -> None:
+        """Initialize an empty, closed in-memory transport."""
         self._responses: deque[str] = deque()
         self._written: list[str] = []
         self._open = False
 
     def open(self) -> None:
+        """Mark the fake transport as open for subsequent reads and writes."""
         self._open = True
 
     def close(self) -> None:
+        """Mark the fake transport as closed without discarding queued data."""
         self._open = False
 
     def write(self, data: str) -> None:
+        """Record one outbound command for later assertions in tests."""
         if not self._open:
             raise TransportError("FakeTransport not open")
         self._written.append(data)
 
     def read_line(self, timeout: float = 2.0) -> str:
+        """Return the next queued response line or raise when none are available."""
         if not self._open:
             raise TransportError("FakeTransport not open")
         if not self._responses:
@@ -821,6 +854,7 @@ class FakeTransport(Transport):
 
     @property
     def is_open(self) -> bool:
+        """Report whether callers may currently interact with the fake transport."""
         return self._open
 
     # ── Test helpers ──────────────────────────────────────────────────
@@ -861,6 +895,7 @@ class JuicerClient:
     """
 
     def __init__(self, transport: Transport) -> None:
+        """Bind the client to a transport implementation."""
         self.transport = transport
 
     # ── Helpers ───────────────────────────────────────────────────────
@@ -972,6 +1007,7 @@ class JuicerClient:
         *,
         context: str,
     ) -> list[ParsedResponse]:
+        """Read one bank-status response per outlet bank and validate the state."""
         responses: list[ParsedResponse] = []
         for bank in BankNumber:
             responses.append(self._expect_bank_status(bank, state=state, context=context))

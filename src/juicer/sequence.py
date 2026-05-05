@@ -36,13 +36,17 @@ ProgressCallback = Callable[[], None]
 class SwitchClient(Protocol):
     """Minimal interface needed by the sequencer — just switch a bank."""
 
-    def switch(self, bank: int, state: str) -> object: ...
+    def switch(self, bank: int, state: str) -> object:
+        """Apply the requested ON/OFF state to the specified outlet bank."""
+        ...
 
 
 class CancelToken(Protocol):
     """Minimal cancellation interface accepted by the sequencer."""
 
-    def is_set(self) -> bool: ...
+    def is_set(self) -> bool:
+        """Report whether the caller has requested the active sequence to stop."""
+        ...
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -72,6 +76,7 @@ def _play_sound(path: str) -> None:
 
 
 def _report_progress(progress_callback: ProgressCallback | None) -> None:
+    """Invoke the optional progress callback when one has been provided."""
     if progress_callback is not None:
         progress_callback()
 
