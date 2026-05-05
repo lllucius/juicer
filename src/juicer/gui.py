@@ -131,6 +131,35 @@ if _PYSIDE6_AVAILABLE:
             except Exception as exc:
                 self.error.emit(str(exc))
 
+    class _WorkerCallbacks(QObject):
+        """Dispatch worker results in the GUI thread."""
+
+        def __init__(
+            self,
+            success: Callable[[object], None],
+            error: Callable[[str], None],
+            cleanup: Callable[[], None],
+            parent: QObject,
+        ) -> None:
+            super().__init__(parent)
+            self._success = success
+            self._error = error
+            self._cleanup = cleanup
+
+        @Slot(object)
+        def on_finished(self, result: object) -> None:
+            try:
+                self._success(result)
+            finally:
+                self._cleanup()
+
+        @Slot(str)
+        def on_error(self, message: str) -> None:
+            try:
+                self._error(message)
+            finally:
+                self._cleanup()
+
     # ──────────────────────────────────────────────────────────────────
     # Panels
     # ──────────────────────────────────────────────────────────────────
@@ -376,13 +405,13 @@ if _PYSIDE6_AVAILABLE:
                 lbl = QLabel(f"Bank {i}:")
                 banks_layout.addWidget(lbl, i - 1, 0)
 
-                btn_on = QPushButton("&ON")
+                btn_on = QPushButton("ON")
                 btn_on.setAccessibleName(f"Turn Bank {i} On")
                 _set_help(btn_on, f"Turn outlet bank {i} on.")
                 btn_on.clicked.connect(partial(self._switch_bank, i, "ON"))
                 banks_layout.addWidget(btn_on, i - 1, 1)
 
-                btn_off = QPushButton("O&FF")
+                btn_off = QPushButton("OFF")
                 btn_off.setAccessibleName(f"Turn Bank {i} Off")
                 _set_help(btn_off, f"Turn outlet bank {i} off.")
                 btn_off.clicked.connect(partial(self._switch_bank, i, "OFF"))
@@ -424,7 +453,7 @@ if _PYSIDE6_AVAILABLE:
                 f"Path to the WAV file to play for the {sound_label.lower()}.",
             )
             sound_browse_row = self._path_row(self.edit_sound, f"Browse {sound_label}")
-            sound_form.addRow(_label(f"{sound_label} &Path:", self.edit_sound), sound_browse_row)
+            sound_form.addRow(_label(f"{sound_label} Path:", self.edit_sound), sound_browse_row)
             layout.addWidget(sound_group)
 
             self.bank_widgets: dict[int, dict[str, Any]] = {}
@@ -441,7 +470,7 @@ if _PYSIDE6_AVAILABLE:
                 combo.addItem("Turn ON", 1)
                 combo.addItem("Turn OFF", 0)
                 _set_help(combo, f"Choose what the {label.lower()} sequence does to bank {i}.")
-                row_layout.addWidget(_label("&Action:", combo))
+                row_layout.addWidget(_label("Action:", combo))
                 row_layout.addWidget(combo)
 
                 # Pre-delay
@@ -451,7 +480,7 @@ if _PYSIDE6_AVAILABLE:
                 pre_spin.setSuffix(" ms")
                 pre_spin.setSingleStep(100)
                 _set_help(pre_spin, f"Delay before the {label.lower()} action for bank {i}.")
-                row_layout.addWidget(_label("Delay &Before:", pre_spin))
+                row_layout.addWidget(_label("Delay Before:", pre_spin))
                 row_layout.addWidget(pre_spin)
 
                 # Post-delay
@@ -461,7 +490,7 @@ if _PYSIDE6_AVAILABLE:
                 post_spin.setSuffix(" ms")
                 post_spin.setSingleStep(100)
                 _set_help(post_spin, f"Delay after the {label.lower()} action for bank {i}.")
-                row_layout.addWidget(_label("Delay A&fter:", post_spin))
+                row_layout.addWidget(_label("Delay After:", post_spin))
                 row_layout.addWidget(post_spin)
 
                 layout.addWidget(group)
@@ -479,7 +508,7 @@ if _PYSIDE6_AVAILABLE:
             row_layout.setContentsMargins(0, 0, 0, 0)
             row_layout.addWidget(edit)
 
-            btn_browse = QPushButton("&Browse…")
+            btn_browse = QPushButton("Browse…")
             btn_browse.setAccessibleName(accessible_name)
             _set_help(btn_browse, "Browse for a WAV sound file.")
             btn_browse.clicked.connect(lambda: self._browse_sound(edit))
@@ -562,7 +591,7 @@ if _PYSIDE6_AVAILABLE:
             _set_help(self.lbl_status, "The current Windows service status.")
             status_row.addWidget(self.lbl_status)
 
-            self.btn_refresh_status = QPushButton("&Refresh")
+            self.btn_refresh_status = QPushButton("Refresh")
             self.btn_refresh_status.setAccessibleName("Refresh Service Status")
             _set_help(self.btn_refresh_status, "Refresh the Juicer Windows service status.")
             self.btn_refresh_status.clicked.connect(self._refresh_status)
@@ -585,7 +614,7 @@ if _PYSIDE6_AVAILABLE:
             self.btn_uninstall.clicked.connect(self._uninstall)
             btn_layout.addWidget(self.btn_uninstall, 0, 1)
 
-            self.btn_start = QPushButton("&Start Service")
+            self.btn_start = QPushButton("Start Service")
             self.btn_start.setAccessibleName("Start Juicer Service")
             _set_help(self.btn_start, "Start the Juicer Windows service.")
             self.btn_start.clicked.connect(self._start)
@@ -671,7 +700,7 @@ if _PYSIDE6_AVAILABLE:
 
             # Export
             export_row = QHBoxLayout()
-            self.btn_export = QPushButton("&Export to TOML…")
+            self.btn_export = QPushButton("E&xport to TOML…")
             self.btn_export.setAccessibleName("Export Configuration to TOML File")
             _set_help(self.btn_export, "Export the current configuration to a TOML file.")
             self.btn_export.clicked.connect(self._export)
@@ -681,7 +710,7 @@ if _PYSIDE6_AVAILABLE:
 
             # Import
             import_row = QHBoxLayout()
-            self.btn_import = QPushButton("&Import from TOML…")
+            self.btn_import = QPushButton("I&mport from TOML…")
             self.btn_import.setAccessibleName("Import Configuration from TOML File")
             _set_help(self.btn_import, "Import configuration settings from a TOML file.")
             self.btn_import.clicked.connect(self._import)
@@ -749,7 +778,7 @@ if _PYSIDE6_AVAILABLE:
 
             header = QHBoxLayout()
             header.addWidget(QLabel("Application Log"))
-            self.btn_clear = QPushButton("&Clear")
+            self.btn_clear = QPushButton("C&lear")
             self.btn_clear.setAccessibleName("Clear Log Messages")
             _set_help(self.btn_clear, "Clear the GUI log viewer.")
             self.btn_clear.clicked.connect(self._clear)
@@ -784,7 +813,7 @@ if _PYSIDE6_AVAILABLE:
             super().__init__(parent)
             layout = QVBoxLayout(self)
 
-            self.btn_refresh = QPushButton("&Refresh Device Status")
+            self.btn_refresh = QPushButton("Refresh Device Status")
             self.btn_refresh.setAccessibleName("Refresh Device Status")
             _set_help(self.btn_refresh, "Query the connected UPS for its latest status.")
             self.btn_refresh.clicked.connect(self.refresh_requested.emit)
@@ -837,19 +866,19 @@ if _PYSIDE6_AVAILABLE:
             self.combo_buzzer = self._combo(["ON", "OFF"], "Buzzer Mode")
             form.addRow(_label("&Buzzer:", self.combo_buzzer), self.combo_buzzer)
             self.combo_avr = self._combo(["OFF", "STANDARD", "SENSITIVE"], "AVR Mode")
-            form.addRow(_label("&AVR:", self.combo_avr), self.combo_avr)
+            form.addRow(_label("AVR:", self.combo_avr), self.combo_avr)
             self.combo_feedback = self._combo(["ON", "OFF"], "Feedback Mode")
-            form.addRow(_label("&Feedback:", self.combo_feedback), self.combo_feedback)
+            form.addRow(_label("Feedbac&k:", self.combo_feedback), self.combo_feedback)
             self.combo_linefeed = self._combo(["ON", "OFF"], "Linefeed Mode")
-            form.addRow(_label("&Linefeed:", self.combo_linefeed), self.combo_linefeed)
+            form.addRow(_label("Linefeed:", self.combo_linefeed), self.combo_linefeed)
             self.combo_brightness = self._combo(["100", "075", "050", "025"], "Brightness")
-            form.addRow(_label("B&rightness:", self.combo_brightness), self.combo_brightness)
+            form.addRow(_label("Bright&ness:", self.combo_brightness), self.combo_brightness)
             self.combo_scroll = self._combo(["5SEC", "10SEC", "OFF"], "Scroll Mode")
             form.addRow(_label("&Scroll:", self.combo_scroll), self.combo_scroll)
             self.combo_sleep = self._combo(["30SEC", "60SEC", "OFF"], "Sleep Mode")
-            form.addRow(_label("Slee&p:", self.combo_sleep), self.combo_sleep)
+            form.addRow(_label("Sleep:", self.combo_sleep), self.combo_sleep)
             self.combo_normalvolt = self._combo(["220", "230", "240"], "Normal Voltage")
-            form.addRow(_label("&Normal Voltage:", self.combo_normalvolt), self.combo_normalvolt)
+            form.addRow(_label("Normal Volta&ge:", self.combo_normalvolt), self.combo_normalvolt)
 
             self.spin_bthresh3 = QSpinBox()
             self.spin_bthresh3.setAccessibleName("Bank 3 Battery Threshold")
@@ -874,19 +903,19 @@ if _PYSIDE6_AVAILABLE:
             layout.addWidget(group)
 
             buttons = QHBoxLayout()
-            self.btn_load = QPushButton("&Load from Device")
+            self.btn_load = QPushButton("L&oad from Device")
             self.btn_load.setAccessibleName("Load Device Configuration")
             _set_help(self.btn_load, "Load device configuration values from the connected UPS.")
             self.btn_load.clicked.connect(self.load_requested.emit)
             buttons.addWidget(self.btn_load)
 
-            self.btn_apply = QPushButton("&Apply to Device")
+            self.btn_apply = QPushButton("Appl&y to Device")
             self.btn_apply.setAccessibleName("Apply Device Configuration")
             _set_help(self.btn_apply, "Apply these configuration values to the connected UPS.")
             self.btn_apply.clicked.connect(self._emit_apply)
             buttons.addWidget(self.btn_apply)
 
-            self.btn_reset = QPushButton("Factory &Reset Device")
+            self.btn_reset = QPushButton("Factory Reset Device")
             self.btn_reset.setAccessibleName("Factory Reset Device")
             _set_help(self.btn_reset, "Reset the connected UPS configuration to factory defaults.")
             self.btn_reset.clicked.connect(self.reset_requested.emit)
@@ -977,7 +1006,7 @@ if _PYSIDE6_AVAILABLE:
             self._client: Any = None
             self._config = GlobalConfig()
             self._busy = False
-            self._workers: list[tuple[Any, Any]] = []
+            self._workers: list[tuple[_SerialWorker, QThread, _WorkerCallbacks]] = []
 
             # Central widget with tabs + bottom button row
             central = QWidget()
@@ -996,13 +1025,13 @@ if _PYSIDE6_AVAILABLE:
             btn_row = QHBoxLayout()
             btn_row.setContentsMargins(0, 0, 0, 0)
 
-            self.btn_save = QPushButton("&Save Settings")
+            self.btn_save = QPushButton("Sa&ve Settings")
             self.btn_save.setAccessibleName("Save Settings")
             _set_help(self.btn_save, "Save the current configuration settings.")
             self.btn_save.clicked.connect(self._on_save_settings)
             btn_row.addWidget(self.btn_save)
 
-            self.btn_reset = QPushButton("&Reset to Defaults")
+            self.btn_reset = QPushButton("Reset to Defaults")
             self.btn_reset.setAccessibleName("Reset to Defaults")
             _set_help(self.btn_reset, "Reset the configuration fields to their default values.")
             self.btn_reset.clicked.connect(self._on_reset_defaults)
@@ -1010,7 +1039,7 @@ if _PYSIDE6_AVAILABLE:
 
             btn_row.addStretch()
 
-            self.btn_close = QPushButton("&Close")
+            self.btn_close = QPushButton("Clos&e")
             self.btn_close.setAccessibleName("Close Window")
             _set_help(self.btn_close, "Close the Juicer GUI.")
             self.btn_close.clicked.connect(self.close)
@@ -1037,15 +1066,15 @@ if _PYSIDE6_AVAILABLE:
             overview_layout.addWidget(self.overview)
             overview_layout.addStretch()
 
-            self.tabs.addTab(self.overview_tab, "&Overview")
-            self.tabs.addTab(self.manual_controls, "&Manual Control")
-            self.tabs.addTab(self.boot_editor, "&Boot Sequence")
-            self.tabs.addTab(self.shutdown_editor, "S&hutdown Sequence")
-            self.tabs.addTab(self.device_status, "&Device Status")
-            self.tabs.addTab(self.device_config, "Device &Config")
-            self.tabs.addTab(self.service_panel, "&Service")
-            self.tabs.addTab(self.import_export, "&Import/Export")
-            self.tabs.addTab(self.log_viewer, "&Log")
+            self.tabs.addTab(self.overview_tab, "Overview")
+            self.tabs.addTab(self.manual_controls, "Manual Control")
+            self.tabs.addTab(self.boot_editor, "Boot Sequence")
+            self.tabs.addTab(self.shutdown_editor, "Shutdown Sequence")
+            self.tabs.addTab(self.device_status, "Device Status")
+            self.tabs.addTab(self.device_config, "Device Config")
+            self.tabs.addTab(self.service_panel, "Service")
+            self.tabs.addTab(self.import_export, "Import/Export")
+            self.tabs.addTab(self.log_viewer, "Log")
 
             # Status bar
             self.status_bar = QStatusBar()
@@ -1239,23 +1268,13 @@ if _PYSIDE6_AVAILABLE:
                 thread.wait()
                 worker.deleteLater()
                 thread.deleteLater()
+                callbacks.deleteLater()
 
-            def on_finished(result: object) -> None:
-                try:
-                    success(result)
-                finally:
-                    cleanup()
-
-            def on_error(message: str) -> None:
-                try:
-                    error(message)
-                finally:
-                    cleanup()
-
+            callbacks = _WorkerCallbacks(success, error, cleanup, self)
             thread.started.connect(worker.run)
-            worker.finished.connect(on_finished, Qt.ConnectionType.QueuedConnection)
-            worker.error.connect(on_error, Qt.ConnectionType.QueuedConnection)
-            self._workers.append((worker, thread))
+            worker.finished.connect(callbacks.on_finished, Qt.ConnectionType.QueuedConnection)
+            worker.error.connect(callbacks.on_error, Qt.ConnectionType.QueuedConnection)
+            self._workers.append((worker, thread, callbacks))
             thread.start()
 
         def _collect_status(self, client: Any) -> dict[str, str]:
