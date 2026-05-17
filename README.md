@@ -658,14 +658,14 @@ boundary corruption when the device sends CR-only responses back-to-back.
 
 The real F1500-UPS firmware differs from the printed manual in several places:
 
-- Every response ends with a bare `>` character (0x3E, no CR) that acts as a
-  response terminator. The Python client raises `PromptReceived` internally
-  when it sees this byte and uses it to detect end-of-response.
+- After command output, the device prints a bare `>` character (0x3E, no CR)
+  as a shell-style ready prompt. The prompt is not part of the response; the
+  Python client raises `PromptReceived` internally when it sees this byte.
 - Many responses omit spaces, such as `$BANK1=ON`, `$BUZZER=OFF`, and
   `$BTHRESH3=060`.
 - `!ALL_ON` and `!ALL_OFF` also report `$BUTTON=ON`.
 - `!SET_FEEDBACK OFF`, `!SET_LINEFEED`, `!SET_BRIGHT`, `!SET_SCROLLMODE`, and
-  `!SET_SLEEPMODE` return only the `>` prompt with no data line.
+  `!SET_SLEEPMODE` print only the `>` ready prompt with no data line.
 - `!SET_LINEFEED ON` confirms as `LINEFEED=ON` without the leading `$`.
 - `?VOLTAGE` reports `$VOLTS_IN=<value>`.
 - `?LIST_CONFIG` reports bank 3 and bank 4 thresholds separately.
@@ -684,7 +684,7 @@ The real F1500-UPS firmware differs from the printed manual in several places:
 
 The in-memory `FakeTransport` exists so tests can queue expected response lines
 without opening a real serial device. Call `enqueue_prompt()` to simulate a
-real-device `>` terminator; `read_line()` will raise `PromptReceived` just as
+real-device `>` ready prompt; `read_line()` will raise `PromptReceived` just as
 `SerialTransport` does when it receives the `>` byte. This is a key reason the
 protocol module has high test coverage and remains safe to refactor.
 

@@ -139,9 +139,9 @@ def test_read_line_discards_optional_lf_after_cr() -> None:
 
 
 def test_read_line_raises_prompt_received_when_gt_is_first_byte() -> None:
-    """Real firmware appends '>' (0x3E) as response terminator; must raise PromptReceived."""
+    """Real firmware prints '>' (0x3E) as a ready prompt after command output."""
     transport = SerialTransport(port="COM1")
-    # Single-line response followed by '>' prompt, as seen on real device
+    # Single-line response followed by the ready prompt, as seen on real device
     transport._serial = _StubSerial(b"$BUZZER=ON\r>")
 
     line = transport.read_line()
@@ -151,8 +151,8 @@ def test_read_line_raises_prompt_received_when_gt_is_first_byte() -> None:
         transport.read_line()
 
 
-def test_read_line_raises_prompt_received_for_prompt_only_response() -> None:
-    """Commands like !SET_LINEFEED return only '>' with no preceding data line."""
+def test_read_line_raises_prompt_received_for_prompt_only_command() -> None:
+    """Commands like !SET_LINEFEED print only '>' with no preceding data line."""
     transport = SerialTransport(port="COM1")
     transport._serial = _StubSerial(b">")
 
@@ -160,8 +160,8 @@ def test_read_line_raises_prompt_received_for_prompt_only_response() -> None:
         transport.read_line()
 
 
-def test_read_line_handles_multi_line_response_ending_with_prompt() -> None:
-    """Multi-line response: all data lines returned, then PromptReceived on '>'."""
+def test_read_line_handles_multi_line_output_followed_by_prompt() -> None:
+    """Multi-line output: all data lines returned, then PromptReceived on '>'."""
     transport = SerialTransport(port="COM1")
     transport._serial = _StubSerial(b"$BANK1=ON\r$BANK2=ON\r$BANK3=ON\r$BANK4=ON\r>")
 
@@ -185,7 +185,7 @@ def test_fake_transport_enqueue_prompt_raises_prompt_received() -> None:
 
 
 def test_fake_transport_enqueue_prompt_only() -> None:
-    """enqueue_prompt() with no data lines simulates a prompt-only response."""
+    """enqueue_prompt() with no data lines simulates a prompt-only command."""
     t = FakeTransport()
     t.open()
     t.enqueue_prompt()
@@ -914,7 +914,7 @@ def test_client_set_feedback_off_accepts_real_device_no_response() -> None:
 
 
 def test_client_set_feedback_off_accepts_prompt_only() -> None:
-    """Real firmware: !SET_FEEDBACK OFF → '>' (prompt only)."""
+    """Real firmware: !SET_FEEDBACK OFF → '>' (ready prompt only)."""
     t = FakeTransport()
     t.open()
     t.enqueue_prompt()
@@ -933,7 +933,7 @@ def test_client_set_linefeed_off() -> None:
 
 
 def test_client_set_linefeed_prompt_only() -> None:
-    """Real firmware: !SET_LINEFEED ON/OFF → only '>' (no data line)."""
+    """Real firmware: !SET_LINEFEED ON/OFF → only '>' prompt (no data line)."""
     t = FakeTransport()
     t.open()
     t.enqueue_prompt()
@@ -961,7 +961,7 @@ def test_client_set_bright_all_levels() -> None:
 
 
 def test_client_set_bright_prompt_only() -> None:
-    """Real firmware: !SET_BRIGHT → only '>' (no data line)."""
+    """Real firmware: !SET_BRIGHT → only '>' prompt (no data line)."""
     t = FakeTransport()
     t.open()
     t.enqueue_prompt()
@@ -980,7 +980,7 @@ def test_client_set_scrollmode_10sec() -> None:
 
 
 def test_client_set_scrollmode_prompt_only() -> None:
-    """Real firmware: !SET_SCROLLMODE → only '>' (no data line)."""
+    """Real firmware: !SET_SCROLLMODE → only '>' prompt (no data line)."""
     t = FakeTransport()
     t.open()
     t.enqueue_prompt()
@@ -999,7 +999,7 @@ def test_client_set_sleepmode_30sec() -> None:
 
 
 def test_client_set_sleepmode_prompt_only() -> None:
-    """Real firmware: !SET_SLEEPMODE → only '>' (no data line)."""
+    """Real firmware: !SET_SLEEPMODE → only '>' prompt (no data line)."""
     t = FakeTransport()
     t.open()
     t.enqueue_prompt()

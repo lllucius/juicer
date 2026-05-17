@@ -46,13 +46,13 @@ class ValidationError(JuicerError):
 
 
 class PromptReceived(JuicerError):
-    """Device sent the ``>`` prompt character, signalling end of response.
+    """Device sent the ``>`` prompt character, signalling readiness.
 
     Raised by :meth:`SerialTransport.read_line` (and optionally by
     :meth:`FakeTransport.read_line`) when the ``>`` byte (0x3E) is the
     first character of an incoming line.  Client helpers treat this the
-    same as :class:`JuicerTimeoutError` — it marks the end of a
-    variable-length response without being an error.
+    same as :class:`JuicerTimeoutError` for variable-length reads because
+    the shell-style prompt means the device is ready for another command.
     """
 
 
@@ -800,14 +800,15 @@ class SerialTransport(Transport):
     def read_line(self, timeout: float = 2.0) -> str:
         """Read bytes until CR (0x0D), stripping optional trailing LF.
 
-        The real Furman F1500-UPS firmware sends a ``>`` prompt byte (0x3E)
-        as the very last byte of every response, with no CR after it.  When
-        ``>`` is the first byte of a new read (either from a previous peek
-        stored in ``_pending_byte`` or arriving fresh from the serial port),
-        :class:`PromptReceived` is raised.  Callers that iterate over
-        variable-length responses (e.g. :meth:`JuicerClient._recv_variable`)
-        catch this exception to stop reading, just as they catch
-        :class:`JuicerTimeoutError`.
+        The real Furman F1500-UPS firmware behaves like a simple shell: it
+        prints command output, then prints a ``>`` prompt byte (0x3E, no CR)
+        to show that it is ready for the next command.  The prompt is not
+        part of the response data.  When ``>`` is the first byte of a new read
+        (either from a previous peek stored in ``_pending_byte`` or arriving
+        fresh from the serial port), :class:`PromptReceived` is raised.
+        Callers that iterate over variable-length responses (e.g.
+        :meth:`JuicerClient._recv_variable`) catch this exception to stop
+        reading, just as they catch :class:`JuicerTimeoutError`.
         """
         if not self._serial or not self._serial.is_open:
             raise TransportError("Serial port not open")
@@ -821,7 +822,7 @@ class SerialTransport(Transport):
                 b = self._serial.read(1)
             if not b:
                 continue
-            if b[0] == 0x3E and not buf:  # '>' prompt — end of response
+            if b[0] == 0x3E and not buf:  # '>' prompt — ready for next command
                 raise PromptReceived("Device '>' prompt received")
             if b[0] == 0x0D:  # CR — end of line
                 # Peek for optional LF
@@ -866,7 +867,7 @@ class FakeTransport(Transport):
         self._written: list[str] = []
         self._open = False
 
-    # Singleton sentinel queued by enqueue_prompt() to simulate '>' character.
+    # Singleton sentinel queued by enqueue_prompt() to simulate the '>' prompt.
     _PROMPT: _PromptSentinel = _PromptSentinel()
 
     def open(self) -> None:
@@ -889,7 +890,7 @@ class FakeTransport(Transport):
         If the next queued item is the internal prompt sentinel (enqueued via
         :meth:`enqueue_prompt`), raises :class:`PromptReceived` to mirror the
         behaviour of :meth:`SerialTransport.read_line` when the real device
-        sends its ``>`` terminator.
+        prints its ``>`` ready prompt.
         """
         if not self._open:
             raise TransportError("FakeTransport not open")
@@ -916,10 +917,10 @@ class FakeTransport(Transport):
         self._responses.extend(lines)
 
     def enqueue_prompt(self) -> None:
-        """Queue a simulated ``>`` prompt terminator.
+        """Queue a simulated ``>`` ready prompt.
 
-        Use this to reproduce real-firmware responses that contain only the
-        ``>`` prompt and no data lines (e.g. ``!SET_LINEFEED ON``).  The next
+        Use this to reproduce real-firmware command cycles that print no data
+        lines before the ``>`` prompt (e.g. ``!SET_LINEFEED ON``).  The next
         call to :meth:`read_line` will raise :class:`PromptReceived`.
         """
         self._responses.append(FakeTransport._PROMPT)
@@ -979,7 +980,7 @@ class JuicerClient:
     def _recv_until_timeout(
         self, timeout: float = 0.5, max_lines: int = 20
     ) -> list[ParsedResponse]:
-        """Read variable-length responses, stopping after a quiet timeout or prompt."""
+        """Read variable-length responses, stopping after quiet timeout or prompt."""
         results: list[ParsedResponse] = []
         for _ in range(max_lines):
             try:
@@ -1126,7 +1127,7 @@ class JuicerClient:
         Real firmware behaviour (observed on F1500-UPS):
 
         * ``!SET_FEEDBACK ON``  → ``$FEEDBACK=ON\\r>``
-        * ``!SET_FEEDBACK OFF`` → ``>`` (prompt only, no data line)
+        * ``!SET_FEEDBACK OFF`` → ``>`` (ready prompt only, no data line)
         """
         if isinstance(mode, FeedbackMode):
             feedback_mode = mode
@@ -1136,7 +1137,7 @@ class JuicerClient:
         try:
             return [self._expect_one(FeedbackResponse, timeout=0.5, context="!SET_FEEDBACK")]
         except PromptReceived:
-            # A bare '>' prompt with no data line is valid only for OFF.
+            # A bare '>' ready prompt with no data line is valid only for OFF.
             if feedback_mode == FeedbackMode.OFF:
                 return []
             raise
@@ -1148,7 +1149,7 @@ class JuicerClient:
     def set_linefeed(self, mode: str | LinefeedMode) -> list[ParsedResponse]:
         """Send ``!SET_LINEFEED``.
 
-        Real firmware returns only the ``>`` prompt for this command (no data
+        Real firmware prints only the ``>`` prompt for this command (no data
         line), so an empty list is a valid successful result.
         """
         self._send(cmd_set_linefeed(mode))
@@ -1160,7 +1161,7 @@ class JuicerClient:
     def set_bright(self, level: str | Brightness) -> list[ParsedResponse]:
         """Send ``!SET_BRIGHT``.
 
-        Real firmware returns only the ``>`` prompt for this command (no data
+        Real firmware prints only the ``>`` prompt for this command (no data
         line), so an empty list is a valid successful result.
         """
         self._send(cmd_set_bright(level))
@@ -1172,7 +1173,7 @@ class JuicerClient:
     def set_scrollmode(self, mode: str | ScrollMode) -> list[ParsedResponse]:
         """Send ``!SET_SCROLLMODE``.
 
-        Real firmware returns only the ``>`` prompt for this command (no data
+        Real firmware prints only the ``>`` prompt for this command (no data
         line), so an empty list is a valid successful result.
         """
         self._send(cmd_set_scrollmode(mode))
@@ -1184,7 +1185,7 @@ class JuicerClient:
     def set_sleepmode(self, mode: str | SleepMode) -> list[ParsedResponse]:
         """Send ``!SET_SLEEPMODE``.
 
-        Real firmware returns only the ``>`` prompt for this command (no data
+        Real firmware prints only the ``>`` prompt for this command (no data
         line), so an empty list is a valid successful result.
         """
         self._send(cmd_set_sleepmode(mode))

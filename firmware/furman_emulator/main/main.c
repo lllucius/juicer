@@ -495,8 +495,8 @@ static void handle_query_help(void)
 
 /*
  * Send the '>' prompt byte that the real Furman F1500-UPS firmware transmits
- * after every command response (including commands that produce no data lines).
- * The Python client reads until it sees this byte to detect end-of-response.
+ * after command output (including commands that produce no data lines) to
+ * indicate that it is ready for the next command, like a shell prompt.
  */
 static void send_prompt(void)
 {

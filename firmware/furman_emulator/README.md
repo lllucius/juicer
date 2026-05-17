@@ -131,7 +131,10 @@ juicer-gui
 
 Any unrecognised command returns `$INVALID_PARAMETER`.
 
-Every response — including commands that produce no data lines — is terminated by a bare `>` character (0x3E, no CR). This matches observed real F1500-UPS firmware behaviour and is how the Python client detects end-of-response.
+After command output, the emulator prints a bare `>` character (0x3E, no CR)
+as a ready prompt, matching observed real F1500-UPS firmware behaviour. The
+prompt is not part of the command response; it indicates that the device is
+ready for another command.
 
 ---
 
