@@ -173,6 +173,41 @@ def test_read_line_handles_multi_line_output_followed_by_prompt() -> None:
         transport.read_line()
 
 
+def test_read_line_discards_stray_bytes_before_dollar() -> None:
+    """Garbage bytes before a '$' line start are silently discarded."""
+    transport = SerialTransport(port="COM1")
+    transport._serial = _StubSerial(b"\x00\x00$PWR=NORMAL\r")
+
+    assert transport.read_line() == "$PWR=NORMAL"
+
+
+def test_client_drains_trailing_prompt_between_commands() -> None:
+    """Regression: leftover '>' must not corrupt the next command's read.
+
+    Mirrors the GUI failure where each query reported "Unavailable
+    (Device '>' prompt received)" because the trailing prompt from the
+    previous response remained buffered.
+    """
+    t = FakeTransport()
+    t.open()
+    # ?ID response (three IDLineResponse lines) + prompt
+    t.enqueue_responses(["$FURMAN", "$F1500-UPS", "$AJ1365"])
+    t.enqueue_prompt()
+    # ?POWERSTAT response + prompt
+    t.enqueue_response("$PWR=NORMAL")
+    t.enqueue_prompt()
+    client = JuicerClient(t)
+
+    identity = client.query_id()
+    assert identity.model == "F1500-UPS"
+
+    # Without the post-command prompt drain this call would raise
+    # ProtocolError because read_line would return PromptReceived from
+    # the leftover ?ID prompt instead of the actual $PWR line.
+    power = client.query_power_status()
+    assert power.status == PowerStatus.NORMAL
+
+
 def test_fake_transport_enqueue_prompt_raises_prompt_received() -> None:
     t = FakeTransport()
     t.open()
@@ -717,6 +752,21 @@ def test_fake_transport_raises_timeout_when_empty() -> None:
         t.read_line()
 
 
+def test_client_initialize_sends_feedback_and_linefeed() -> None:
+    """initialize() establishes a known SET_FEEDBACK/SET_LINEFEED environment."""
+    t = FakeTransport()
+    t.open()
+    # Real firmware emits prompt-only responses for both setup commands;
+    # initialize() must tolerate that without raising.
+    t.enqueue_prompt()
+    t.enqueue_prompt()
+    client = JuicerClient(t)
+
+    client.initialize()
+
+    assert t.written == ["!SET_FEEDBACK ON\r", "!SET_LINEFEED OFF\r"]
+
+
 def test_fake_transport_raises_when_not_open() -> None:
     t = FakeTransport()
     with pytest.raises(TransportError):
@@ -816,9 +866,14 @@ def test_client_switch_reads_only_expected_bank_response() -> None:
 
     result = client.switch(2, "ON")
 
-    assert t.read_count == 1
+    # One read for the bank-status line, plus the drain loop that
+    # consumes the queued follow-up while looking for the trailing ``>``
+    # prompt and then one more read that raises JuicerTimeoutError to end
+    # the drain (the FakeTransport ran out of queued data).
+    assert t.read_count == 3
     assert isinstance(result[0], BankStatusResponse)
-    assert t.read_line() == "$BANK 3 = ON"
+    with pytest.raises(JuicerTimeoutError):
+        t.read_line()
 
 
 def test_client_switch_rejects_wrong_bank_response() -> None:
@@ -1428,11 +1483,17 @@ def test_stateful_configure_then_reset() -> None:
 
 def test_stateful_battery_queries() -> None:
     """Query battery level, state, and backup time in sequence."""
-    t = _open_fake(
-        "$BATTERY = 85",
-        "$BATTSTATE = FULL",
-        "$TIME = 60",
-    )
+    t = FakeTransport()
+    t.open()
+    # Each query reads its data line and then drains the trailing ``>``
+    # prompt that real firmware emits after every response, so each block
+    # must be followed by an enqueue_prompt().
+    t.enqueue_response("$BATTERY = 85")
+    t.enqueue_prompt()
+    t.enqueue_response("$BATTSTATE = FULL")
+    t.enqueue_prompt()
+    t.enqueue_response("$TIME = 60")
+    t.enqueue_prompt()
     client = JuicerClient(t)
 
     lvl = client.query_battery_status()

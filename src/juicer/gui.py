@@ -1426,6 +1426,10 @@ if _PYSIDE6_AVAILABLE:
                 transport = SerialTransport(port=port)
                 transport.open()
                 client = JuicerClient(transport)
+                # Establish known feedback/line-feed environment so subsequent
+                # status queries parse deterministically; failures here are
+                # logged but do not prevent connection.
+                client.initialize()
                 status = self._collect_status(client)
                 return transport, client, status
 

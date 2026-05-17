@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import abc
 import enum
+import functools
 import logging
 import re
 import time
 from collections import deque
-from typing import Any, Sequence, TypeVar
+from typing import Any, Callable, Sequence, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -724,6 +725,15 @@ class Transport(abc.ABC):
         Raises ``JuicerTimeoutError`` if no complete line within *timeout* seconds.
         """
 
+    def drain(self) -> None:
+        """Discard any bytes already buffered for reading.
+
+        Default implementation is a no-op; transports that talk to a real
+        device override this to clear stale input before sending the next
+        command.  This makes the client resilient when the previous response
+        was not fully consumed (e.g. an exception interrupted the read loop).
+        """
+
     @property
     @abc.abstractmethod
     def is_open(self) -> bool:
@@ -774,6 +784,10 @@ class SerialTransport(Transport):
                     write_timeout=2.0,
                 )
                 logger.info("Opened serial port %s (attempt %d)", self.port, attempt + 1)
+                # Discard any stale bytes that may have been buffered before
+                # we opened the port; the device may have been printing prompts
+                # or unsolicited status while we were not listening.
+                self.drain()
                 return
             except serial.SerialException as exc:
                 last_err = exc
@@ -797,6 +811,33 @@ class SerialTransport(Transport):
             raise TransportError("Serial port not open")
         self._serial.write(data.encode("ascii"))
 
+    def drain(self) -> None:
+        """Discard any bytes already available on the port.
+
+        Used to recover from a previous command whose trailing ``>`` prompt
+        was not consumed (e.g. when an exception interrupted reading).  Reads
+        non-blockingly until no more bytes arrive.
+        """
+        self._pending_byte = b""
+        if not self._serial or not self._serial.is_open:
+            return
+        try:
+            in_waiting = int(getattr(self._serial, "in_waiting", 0) or 0)
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            return
+        if in_waiting <= 0:
+            return
+        try:
+            discarded = self._serial.read(in_waiting)
+        except Exception:  # pragma: no cover - defensive
+            return
+        try:
+            count = len(discarded) if discarded else 0
+        except TypeError:  # pragma: no cover - defensive
+            return
+        if count:
+            logger.debug("Drained %d stale bytes from serial input", count)
+
     def read_line(self, timeout: float = 2.0) -> str:
         """Read bytes until CR (0x0D), stripping optional trailing LF.
 
@@ -809,6 +850,10 @@ class SerialTransport(Transport):
         Callers that iterate over variable-length responses (e.g.
         :meth:`JuicerClient._recv_variable`) catch this exception to stop
         reading, just as they catch :class:`JuicerTimeoutError`.
+
+        Stray bytes that are neither ``$`` (response start) nor ``>`` (ready
+        prompt) at the beginning of a new line are discarded with a debug
+        log entry, since every valid Furman line begins with ``$``.
         """
         if not self._serial or not self._serial.is_open:
             raise TransportError("Serial port not open")
@@ -830,6 +875,12 @@ class SerialTransport(Transport):
                 if peek and peek[0] != 0x0A:
                     self._pending_byte = peek
                 return buf.decode("ascii", errors="replace")
+            # All valid response lines start with '$'.  Silently drop any
+            # garbage bytes that appear before a line begins, so a single
+            # noise byte cannot corrupt the next response.
+            if not buf and b[0] != 0x24:
+                logger.debug("Discarded stray byte 0x%02X before '$'", b[0])
+                continue
             buf.append(b[0])
         raise JuicerTimeoutError(f"No CR-terminated line within {timeout}s")
 
@@ -946,6 +997,33 @@ class FakeTransport(Transport):
 # ──────────────────────────────────────────────────────────────────────
 
 
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _with_prompt_drain(func: _F) -> _F:
+    """Decorator: consume the trailing ``>`` prompt after a command method.
+
+    Every Furman command response ends with a ``>`` byte that the device
+    prints to signal it is ready for the next command.  Wrapping each
+    public client method ensures that byte is always consumed — on the
+    success path *and* on the error path — so the next command starts
+    with a clean input buffer instead of inheriting a stale prompt that
+    would otherwise raise :class:`PromptReceived` on its first read.
+    """
+
+    @functools.wraps(func)
+    def wrapper(self: "JuicerClient", *args: Any, **kwargs: Any) -> Any:
+        try:
+            return func(self, *args, **kwargs)
+        finally:
+            try:
+                self._drain_prompt()
+            except Exception as drain_exc:  # pragma: no cover - defensive
+                logger.debug("Prompt drain after %s raised %r", func.__name__, drain_exc)
+
+    return wrapper  # type: ignore[return-value]
+
+
 class JuicerClient:
     """High-level client combining transport + command builders + response parsing.
 
@@ -959,7 +1037,18 @@ class JuicerClient:
     # ── Helpers ───────────────────────────────────────────────────────
 
     def _send(self, cmd: str) -> None:
-        """Send a pre-built command string."""
+        """Send a pre-built command string.
+
+        Before writing, any bytes still buffered on the transport are
+        discarded.  In normal operation each command's response ends with
+        ``>`` which is consumed by :meth:`_drain_prompt`; the proactive
+        drain here protects against the case where a previous command
+        aborted before its prompt was consumed.
+        """
+        try:
+            self.transport.drain()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Transport drain before send raised %r", exc)
         logger.debug("TX: %r", cmd)
         self.transport.write(cmd)
 
@@ -972,6 +1061,33 @@ class JuicerClient:
     def _recv_parsed(self, timeout: float = 2.0) -> ParsedResponse:
         """Receive and parse one line."""
         return parse_line(self._recv(timeout))
+
+    def _drain_prompt(self, timeout: float = 0.5) -> list[ParsedResponse]:
+        """Consume bytes up to and including the trailing ``>`` ready prompt.
+
+        Every real-firmware command response ends with the ``>`` byte that
+        the device prints to indicate it is ready for the next command.  This
+        helper is called at the end of every command so the next command
+        starts with a clean buffer (otherwise the leftover ``>`` would be
+        read by the next command's first ``read_line`` and raise
+        :class:`PromptReceived`, surfacing as a spurious "Unavailable" error).
+
+        Any unexpected response lines that arrive before the prompt are
+        returned to the caller so they can be incorporated into the result
+        or surfaced as protocol errors.  If neither a prompt nor any data
+        arrives within *timeout* seconds, returns silently — the FakeTransport
+        and older emulator builds do not always emit a prompt.
+        """
+        extras: list[ParsedResponse] = []
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                extras.append(self._recv_parsed(max(0.01, deadline - time.monotonic())))
+            except PromptReceived:
+                return extras
+            except JuicerTimeoutError:
+                return extras
+        return extras
 
     def _recv_n(self, n: int, timeout: float = 2.0) -> list[ParsedResponse]:
         """Receive and parse *n* response lines."""
@@ -1073,16 +1189,19 @@ class JuicerClient:
 
     # ── Commands ──────────────────────────────────────────────────────
 
+    @_with_prompt_drain
     def all_on(self) -> list[ParsedResponse]:
         """Send ``!ALL_ON`` and collect documented status responses."""
         self._send(cmd_all_on())
         return self._recv_variable(min_lines=1, max_lines=6, context="!ALL_ON")
 
+    @_with_prompt_drain
     def all_off(self) -> list[ParsedResponse]:
         """Send ``!ALL_OFF`` and collect documented status responses."""
         self._send(cmd_all_off())
         return self._recv_variable(min_lines=4, max_lines=6, context="!ALL_OFF")
 
+    @_with_prompt_drain
     def switch(self, bank: int | BankNumber, state: str | BankState) -> list[ParsedResponse]:
         """Send ``!SWITCH`` and collect protocol status lines.
 
@@ -1097,6 +1216,7 @@ class JuicerClient:
             responses.extend(self._recv_until_timeout(timeout=0.25, max_lines=3))
         return responses
 
+    @_with_prompt_drain
     def set_batthresh(self, bank: int | BankNumber, level: int) -> list[ParsedResponse]:
         """Send ``!SET_BATTHRESH`` and read response."""
         self._send(cmd_set_batthresh(bank, level))
@@ -1111,16 +1231,19 @@ class JuicerClient:
             )
         return [resp]
 
+    @_with_prompt_drain
     def set_buzzer(self, mode: str | BuzzerMode) -> list[ParsedResponse]:
         """Send ``!SET_BUZZER``."""
         self._send(cmd_set_buzzer(mode))
         return [self._expect_one(BuzzerResponse, context="!SET_BUZZER")]
 
+    @_with_prompt_drain
     def set_avr(self, mode: str | AVRMode) -> list[ParsedResponse]:
         """Send ``!SET_AVR``."""
         self._send(cmd_set_avr(mode))
         return [self._expect_one(AVRModeResponse, context="!SET_AVR")]
 
+    @_with_prompt_drain
     def set_feedback(self, mode: str | FeedbackMode) -> list[ParsedResponse]:
         """Send ``!SET_FEEDBACK``.
 
@@ -1146,6 +1269,7 @@ class JuicerClient:
                 return []
             raise
 
+    @_with_prompt_drain
     def set_linefeed(self, mode: str | LinefeedMode) -> list[ParsedResponse]:
         """Send ``!SET_LINEFEED``.
 
@@ -1158,6 +1282,7 @@ class JuicerClient:
         except (JuicerTimeoutError, PromptReceived):
             return []
 
+    @_with_prompt_drain
     def set_bright(self, level: str | Brightness) -> list[ParsedResponse]:
         """Send ``!SET_BRIGHT``.
 
@@ -1170,6 +1295,7 @@ class JuicerClient:
         except (JuicerTimeoutError, PromptReceived):
             return []
 
+    @_with_prompt_drain
     def set_scrollmode(self, mode: str | ScrollMode) -> list[ParsedResponse]:
         """Send ``!SET_SCROLLMODE``.
 
@@ -1182,6 +1308,7 @@ class JuicerClient:
         except (JuicerTimeoutError, PromptReceived):
             return []
 
+    @_with_prompt_drain
     def set_sleepmode(self, mode: str | SleepMode) -> list[ParsedResponse]:
         """Send ``!SET_SLEEPMODE``.
 
@@ -1194,6 +1321,7 @@ class JuicerClient:
         except (JuicerTimeoutError, PromptReceived):
             return []
 
+    @_with_prompt_drain
     def reset_all(self) -> FactoryResetResponse:
         """Send ``!RESET_ALL`` and expect factory-reset confirmation."""
         self._send(cmd_reset_all())
@@ -1202,6 +1330,7 @@ class JuicerClient:
             return resp
         raise ProtocolError(f"Expected FactoryResetResponse, got {resp!r}")
 
+    @_with_prompt_drain
     def set_normalvolt(self, voltage: str | NormalVolt) -> list[ParsedResponse]:
         """Send ``!SET_NORMALVOLT``."""
         self._send(cmd_set_normalvolt(voltage))
@@ -1209,6 +1338,7 @@ class JuicerClient:
 
     # ── Queries ───────────────────────────────────────────────────────
 
+    @_with_prompt_drain
     def query_id(self) -> IDResponse:
         """Send ``?ID`` and parse the three-line response."""
         self._send(query_id())
@@ -1222,6 +1352,7 @@ class JuicerClient:
             firmware=id_lines[2],
         )
 
+    @_with_prompt_drain
     def query_outlet_status(self) -> OutletStatusResponse:
         """Send ``?OUTLETSTAT`` and parse four bank-status lines."""
         self._send(query_outletstat())
@@ -1238,6 +1369,7 @@ class JuicerClient:
             raise ProtocolError(f"?OUTLETSTAT response missing banks: {missing_banks}")
         return OutletStatusResponse(banks=banks)
 
+    @_with_prompt_drain
     def query_power_status(self) -> PowerStatusResponse:
         """Send ``?POWERSTAT`` and parse the single-line response."""
         self._send(query_powerstat())
@@ -1246,6 +1378,7 @@ class JuicerClient:
             return resp
         raise ProtocolError(f"Expected PowerStatusResponse, got {resp!r}")
 
+    @_with_prompt_drain
     def query_power(self) -> PowerMetricsResponse:
         """Send ``?POWER`` and parse the four metrics lines."""
         self._send(query_power())
@@ -1274,6 +1407,7 @@ class JuicerClient:
             current=data["current"],
         )
 
+    @_with_prompt_drain
     def query_current(self) -> CurrentResponse:
         """Send ``?CURRENT``."""
         self._send(query_current())
@@ -1282,6 +1416,7 @@ class JuicerClient:
             return resp
         raise ProtocolError(f"Expected CurrentResponse, got {resp!r}")
 
+    @_with_prompt_drain
     def query_voltage(self) -> VoltageResponse:
         """Send ``?VOLTAGE``."""
         self._send(query_voltage())
@@ -1292,6 +1427,7 @@ class JuicerClient:
             return VoltageResponse(volts=resp.volts)
         raise ProtocolError(f"Expected VoltageResponse, got {resp!r}")
 
+    @_with_prompt_drain
     def query_loadstat(self) -> LoadResponse:
         """Send ``?LOADSTAT``."""
         self._send(query_loadstat())
@@ -1300,6 +1436,7 @@ class JuicerClient:
             return resp
         raise ProtocolError(f"Expected LoadResponse, got {resp!r}")
 
+    @_with_prompt_drain
     def query_battery_status(self) -> BatteryLevelResponse:
         """Send ``?BATTERYSTAT``."""
         self._send(query_batterystat())
@@ -1308,6 +1445,7 @@ class JuicerClient:
             return resp
         raise ProtocolError(f"Expected BatteryLevelResponse, got {resp!r}")
 
+    @_with_prompt_drain
     def query_battery_state(self) -> BatteryStateResponse:
         """Send ``?BATTSTATE``."""
         self._send(query_battstate())
@@ -1316,6 +1454,7 @@ class JuicerClient:
             return resp
         raise ProtocolError(f"Expected BatteryStateResponse, got {resp!r}")
 
+    @_with_prompt_drain
     def query_backup_time(self) -> BackupTimeResponse:
         """Send ``?TIME``."""
         self._send(query_time())
@@ -1324,6 +1463,7 @@ class JuicerClient:
             return resp
         raise ProtocolError(f"Expected BackupTimeResponse, got {resp!r}")
 
+    @_with_prompt_drain
     def query_list_config(self) -> ListConfigResponse:
         """Send ``?LIST_CONFIG`` and aggregate response lines."""
         self._send(query_list_config())
@@ -1360,6 +1500,7 @@ class JuicerClient:
                 raise ProtocolError(f"?LIST_CONFIG: unexpected response {resp!r}")
         return cfg
 
+    @_with_prompt_drain
     def query_help(self) -> list[str]:
         """Send ``?HELP`` and return the list of command/query names."""
         self._send(query_help())
@@ -1373,3 +1514,30 @@ class JuicerClient:
             else:
                 raise ProtocolError(f"?HELP: unexpected response {resp!r}")
         return lines
+
+    # ── Connection lifecycle ──────────────────────────────────────────
+
+    def initialize(self) -> None:
+        """Establish a known protocol environment on the device.
+
+        Drains any leftover bytes on the transport, then sets feedback and
+        line-feed modes to documented defaults so subsequent reads parse
+        deterministically.  Failures are swallowed and logged because some
+        emulator builds (and FakeTransport-based tests) do not implement
+        the configuration commands; the client must still function.
+        """
+        try:
+            self.transport.drain()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Transport drain during initialize raised %r", exc)
+        for setter, value in (
+            (self.set_feedback, FeedbackMode.ON),
+            (self.set_linefeed, LinefeedMode.OFF),
+        ):
+            try:
+                setter(value)
+            except Exception as exc:
+                logger.debug(
+                    "initialize: %s(%s) failed (%s); continuing", setter.__name__, value, exc
+                )
+
