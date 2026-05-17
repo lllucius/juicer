@@ -54,6 +54,7 @@ from juicer.protocol import (
     SleepMode,
     SleepModeResponse,
     TransportError,
+    UnsupportedCommandError,
     ValidationError,
     VoltageResponse,
     VoltsInResponse,
@@ -1096,6 +1097,13 @@ def test_client_set_normalvolt_all_values() -> None:
         assert t.last_command == f"!SET_NORMALVOLT {v.value}\r"
 
 
+def test_client_set_normalvolt_invalid_parameter_is_unsupported() -> None:
+    t = _open_fake("$INVALID_PARAMETER")
+    client = JuicerClient(t)
+    with pytest.raises(UnsupportedCommandError, match="!SET_NORMALVOLT"):
+        client.set_normalvolt("220")
+
+
 def test_client_invalid_command_returns_invalid_parameter() -> None:
     t = _open_fake("$INVALID_PARAMETER")
     client = JuicerClient(t)
@@ -1313,7 +1321,7 @@ def test_client_query_battery_state_discharge() -> None:
 def test_client_query_battery_state_wrong_response_raises() -> None:
     t = _open_fake("$INVALID_PARAMETER")
     client = JuicerClient(t)
-    with pytest.raises(ProtocolError):
+    with pytest.raises(UnsupportedCommandError, match=r"\?BATTSTATE"):
         client.query_battery_state()
 
 
@@ -1329,7 +1337,7 @@ def test_client_query_backup_time() -> None:
 def test_client_query_backup_time_wrong_response_raises() -> None:
     t = _open_fake("$INVALID_PARAMETER")
     client = JuicerClient(t)
-    with pytest.raises(ProtocolError):
+    with pytest.raises(UnsupportedCommandError, match=r"\?TIME"):
         client.query_backup_time()
 
 

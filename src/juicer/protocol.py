@@ -34,6 +34,10 @@ class ProtocolError(JuicerError):
     """Invalid or unexpected data on the wire."""
 
 
+class UnsupportedCommandError(ProtocolError):
+    """The connected firmware rejected a command/query as unsupported."""
+
+
 class JuicerTimeoutError(JuicerError):
     """No response within deadline."""
 
@@ -1334,7 +1338,12 @@ class JuicerClient:
     def set_normalvolt(self, voltage: str | NormalVolt) -> list[ParsedResponse]:
         """Send ``!SET_NORMALVOLT``."""
         self._send(cmd_set_normalvolt(voltage))
-        return [self._expect_one(NormalVoltResponse, context="!SET_NORMALVOLT")]
+        resp = self._recv_parsed()
+        if isinstance(resp, InvalidParameterResponse):
+            raise UnsupportedCommandError("!SET_NORMALVOLT: unsupported by this firmware")
+        if isinstance(resp, NormalVoltResponse):
+            return [resp]
+        raise ProtocolError(f"!SET_NORMALVOLT: expected NormalVoltResponse, got {resp!r}")
 
     # ── Queries ───────────────────────────────────────────────────────
 
@@ -1450,6 +1459,8 @@ class JuicerClient:
         """Send ``?BATTSTATE``."""
         self._send(query_battstate())
         resp = self._recv_parsed()
+        if isinstance(resp, InvalidParameterResponse):
+            raise UnsupportedCommandError("?BATTSTATE: unsupported by this firmware")
         if isinstance(resp, BatteryStateResponse):
             return resp
         raise ProtocolError(f"Expected BatteryStateResponse, got {resp!r}")
@@ -1459,6 +1470,8 @@ class JuicerClient:
         """Send ``?TIME``."""
         self._send(query_time())
         resp = self._recv_parsed()
+        if isinstance(resp, InvalidParameterResponse):
+            raise UnsupportedCommandError("?TIME: unsupported by this firmware")
         if isinstance(resp, BackupTimeResponse):
             return resp
         raise ProtocolError(f"Expected BackupTimeResponse, got {resp!r}")
@@ -1540,4 +1553,3 @@ class JuicerClient:
                 logger.debug(
                     "initialize: %s(%s) failed (%s); continuing", setter.__name__, value, exc
                 )
-

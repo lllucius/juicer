@@ -1342,6 +1342,8 @@ if _PYSIDE6_AVAILABLE:
 
         def _collect_status(self, client: Any) -> dict[str, str]:
             """Gather best-effort status text for every overview and status-panel field."""
+            from juicer.protocol import UnsupportedCommandError
+
             status: dict[str, str] = {}
             try:
                 identity = client.query_id()
@@ -1392,11 +1394,15 @@ if _PYSIDE6_AVAILABLE:
             try:
                 bat_state = client.query_battery_state()
                 status["battery_state"] = bat_state.state.value
+            except UnsupportedCommandError:
+                status["battery_state"] = "Unsupported by device"
             except Exception as exc:
                 status["battery_state"] = f"Unavailable ({exc})"
             try:
                 backup = client.query_backup_time()
                 status["backup_time"] = f"{backup.minutes} minutes"
+            except UnsupportedCommandError:
+                status["backup_time"] = "Unsupported by device"
             except Exception as exc:
                 status["backup_time"] = f"Unavailable ({exc})"
             return status
@@ -1587,6 +1593,8 @@ if _PYSIDE6_AVAILABLE:
 
             def apply() -> object:
                 """Send each config-setting command and then reload status text."""
+                from juicer.protocol import UnsupportedCommandError
+
                 self._client.set_buzzer(cast(str, values["buzzer"]))
                 self._client.set_avr(cast(str, values["avr"]))
                 self._client.set_feedback(cast(str, values["feedback"]))
@@ -1594,7 +1602,10 @@ if _PYSIDE6_AVAILABLE:
                 self._client.set_bright(cast(str, values["brightness"]))
                 self._client.set_scrollmode(cast(str, values["scroll_mode"]))
                 self._client.set_sleepmode(cast(str, values["sleep_mode"]))
-                self._client.set_normalvolt(cast(str, values["normalvolt"]))
+                try:
+                    self._client.set_normalvolt(cast(str, values["normalvolt"]))
+                except UnsupportedCommandError:
+                    logger.info("Skipping unsupported !SET_NORMALVOLT")
                 self._client.set_batthresh(3, cast(int, values["bthresh3"]))
                 self._client.set_batthresh(4, cast(int, values["bthresh4"]))
                 return self._collect_status(self._client)
