@@ -57,6 +57,8 @@ COMMANDS: tuple[str, ...] = (
     "?HELP",
 )
 
+_CONTROL_ESCAPES = str.maketrans({"\r": "\\r", "\n": "\\n"})
+
 
 class ReadablePort(Protocol):
     """Minimal serial-port interface used by the quiet-read loop."""
@@ -79,9 +81,7 @@ class Tee:
 
 def escaped(data: bytes) -> str:
     """Return printable ASCII with control bytes escaped."""
-    return data.decode("ascii", errors="backslashreplace").replace("\r", "\\r").replace(
-        "\n", "\\n"
-    )
+    return data.decode("ascii", errors="backslashreplace").translate(_CONTROL_ESCAPES)
 
 
 def read_until_quiet(serial_port: ReadablePort, quiet_timeout: float, max_wait: float) -> bytes:
@@ -90,11 +90,14 @@ def read_until_quiet(serial_port: ReadablePort, quiet_timeout: float, max_wait: 
     deadline = time.monotonic() + max_wait
     quiet_deadline = time.monotonic() + quiet_timeout
 
-    while time.monotonic() < deadline and time.monotonic() < quiet_deadline:
+    while True:
+        now = time.monotonic()
+        if now >= deadline or now >= quiet_deadline:
+            break
         chunk = serial_port.read(1)
         if chunk:
             data.extend(chunk)
-            quiet_deadline = time.monotonic() + quiet_timeout
+            quiet_deadline = now + quiet_timeout
 
     return bytes(data)
 
