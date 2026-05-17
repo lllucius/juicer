@@ -436,6 +436,13 @@ def test_parse_bthresh() -> None:
     assert r.level == 20
 
 
+def test_parse_bthresh_real_device_compact_zero_padded() -> None:
+    r = parse_line("$BTHRESH3=060")
+    assert isinstance(r, BatteryThresholdResponse)
+    assert r.bank == BankNumber.BANK3
+    assert r.level == 60
+
+
 def test_parse_bthresh_bank4() -> None:
     r = parse_line("$BTHRESH 4 = 80")
     assert isinstance(r, BatteryThresholdResponse)
@@ -512,6 +519,12 @@ def test_parse_linefeed() -> None:
     r = parse_line("$LINEFEED = OFF")
     assert isinstance(r, LinefeedResponse)
     assert r.mode == LinefeedMode.OFF
+
+
+def test_parse_linefeed_on_real_device_omits_dollar() -> None:
+    r = parse_line("LINEFEED=ON")
+    assert isinstance(r, LinefeedResponse)
+    assert r.mode == LinefeedMode.ON
 
 
 def test_parse_brightness_all_levels() -> None:
@@ -806,6 +819,14 @@ def test_client_set_feedback_on() -> None:
     assert isinstance(result[0], FeedbackResponse)
 
 
+def test_client_set_feedback_off_accepts_real_device_no_response() -> None:
+    t = _open_fake()
+    client = JuicerClient(t)
+    result = client.set_feedback("OFF")
+    assert t.last_command == "!SET_FEEDBACK OFF\r"
+    assert result == []
+
+
 def test_client_set_linefeed_off() -> None:
     t = _open_fake("$LINEFEED = OFF")
     client = JuicerClient(t)
@@ -1026,6 +1047,15 @@ def test_client_query_voltage() -> None:
     assert result.volts == pytest.approx(230.0)
 
 
+def test_client_query_voltage_accepts_real_device_volts_in_response() -> None:
+    t = _open_fake("$VOLTS_IN=120")
+    client = JuicerClient(t)
+    result = client.query_voltage()
+    assert t.last_command == "?VOLTAGE\r"
+    assert isinstance(result, VoltageResponse)
+    assert result.volts == pytest.approx(120.0)
+
+
 def test_client_query_voltage_wrong_response_raises() -> None:
     t = _open_fake("$INVALID_PARAMETER")
     client = JuicerClient(t)
@@ -1136,23 +1166,51 @@ def test_client_query_list_config_defaults() -> None:
     assert result.sleep_mode == SleepMode.OFF
     assert result.normalvolt == NormalVolt.V230
     assert result.bthresh == 20  # last BTHRESH seen (bank 4)
+    assert result.bthresh3 == 20
+    assert result.bthresh4 == 20
+
+
+def test_client_query_list_config_real_device_format() -> None:
+    t = _open_fake(
+        "$BTHRESH3=060",
+        "$BTHRESH4=040",
+        "$BUZZER=OFF",
+        "$AVR=STANDARD",
+        "$FEEDBACK=ON",
+        "$LINEFEED=OFF",
+        "$BRIGHTNESS=100",
+        "$SCROLL_MODE=OFF",
+        "$SLEEP_MODE=OFF",
+    )
+    client = JuicerClient(t)
+    result = client.query_list_config()
+    assert t.last_command == "?LIST_CONFIG\r"
+    assert result.bthresh == 40
+    assert result.bthresh3 == 60
+    assert result.bthresh4 == 40
+    assert result.buzzer == BuzzerMode.OFF
+    assert result.avr == AVRMode.STANDARD
+    assert result.feedback == FeedbackMode.ON
+    assert result.linefeed == LinefeedMode.OFF
+    assert result.brightness == Brightness.B100
+    assert result.scroll_mode == ScrollMode.OFF
+    assert result.sleep_mode == SleepMode.OFF
 
 
 def test_client_query_help_returns_command_list() -> None:
     help_lines = [
         "!ALL_ON",
         "!ALL_OFF",
-        "!SWITCH <bank> <ON|OFF>",
-        "!SET_BATTHRESH <bank> <level>",
-        "!SET_BUZZER <ON|OFF>",
-        "!SET_AVR <OFF|STANDARD|SENSITIVE>",
-        "!SET_FEEDBACK <ON|OFF>",
-        "!SET_LINEFEED <ON|OFF>",
-        "!SET_BRIGHT <100|075|050|025>",
-        "!SET_SCROLLMODE <5SEC|10SEC|OFF>",
-        "!SET_SLEEPMODE <30SEC|60SEC|OFF>",
+        "!SWITCH",
+        "!SET_BATTHRESH",
+        "!SET_BUZZER",
+        "!SET_AVR",
+        "!SET_FEEDBACK",
+        "!SET_LINEFEED",
         "!RESET_ALL",
-        "!SET_NORMALVOLT <220|230|240>",
+        "!SET_BRIGHT",
+        "!SET_SCROLLMODE",
+        "!SET_SLEEPMODE",
         "?ID",
         "?OUTLETSTAT",
         "?POWERSTAT",
@@ -1161,8 +1219,6 @@ def test_client_query_help_returns_command_list() -> None:
         "?VOLTAGE",
         "?LOADSTAT",
         "?BATTERYSTAT",
-        "?BATTSTATE",
-        "?TIME",
         "?LIST_CONFIG",
         "?HELP",
     ]
@@ -1172,8 +1228,8 @@ def test_client_query_help_returns_command_list() -> None:
     assert t.last_command == "?HELP\r"
     assert "!ALL_ON" in result
     assert "?ID" in result
-    assert "?BATTSTATE" in result
-    assert "?TIME" in result
+    assert "?BATTSTATE" not in result
+    assert "?TIME" not in result
     assert len(result) == len(help_lines)
 
 

@@ -206,7 +206,7 @@ class BatteryLevelResponse(BaseModel):
 
 
 class BatteryThresholdResponse(BaseModel):
-    """``$BTHRESH <bank> = <level>``."""
+    """``$BTHRESH<bank>=<level>``."""
 
     bank: BankNumber
     level: int
@@ -371,6 +371,8 @@ class ListConfigResponse(BaseModel):
     """Aggregate of ``?LIST_CONFIG`` response lines."""
 
     bthresh: int | None = None
+    bthresh3: int | None = None
+    bthresh4: int | None = None
     buzzer: BuzzerMode | None = None
     avr: AVRMode | None = None
     feedback: FeedbackMode | None = None
@@ -581,12 +583,12 @@ _RE_BANK = re.compile(r"^\$BANK\s*(\d)\s*=\s*(ON|OFF)$")
 _RE_BUTTON = re.compile(r"^\$BUTTON\s*=\s*(ON|OFF)$")
 _RE_PWR = re.compile(r"^\$PWR\s*=\s*(.+)$")
 _RE_BATTERY = re.compile(r"^\$BATTERY\s*=\s*(\d+)$")
-_RE_BTHRESH = re.compile(r"^\$BTHRESH\s+(\d)\s*=\s*(\d+)$")
+_RE_BTHRESH = re.compile(r"^\$BTHRESH\s*(\d)\s*=\s*(\d+)$")
 _RE_BTHRESH_GLOBAL = re.compile(r"^\$BTHRESH\s*=\s*(\d+)$")
 _RE_BUZZER = re.compile(r"^\$BUZZER\s*=\s*(ON|OFF)$")
 _RE_AVR_MODE = re.compile(r"^\$AVR\s*=\s*(OFF|STANDARD|SENSITIVE)$")
 _RE_FEEDBACK = re.compile(r"^\$FEEDBACK\s*=\s*(ON|OFF)$")
-_RE_LINEFEED = re.compile(r"^\$LINEFEED\s*=\s*(ON|OFF)$")
+_RE_LINEFEED = re.compile(r"^\$?LINEFEED\s*=\s*(ON|OFF)$")
 _RE_BRIGHTNESS = re.compile(r"^\$BRIGHTNESS\s*=\s*(\d+)$")
 _RE_SCROLL = re.compile(r"^\$SCROLL_MODE\s*=\s*(.+)$")
 _RE_SLEEP = re.compile(r"^\$SLEEP_MODE\s*=\s*(.+)$")
@@ -610,9 +612,6 @@ def parse_line(line: str) -> ParsedResponse:
     """
     line = line.strip("\r\n ")
 
-    if not line.startswith("$"):
-        return RawResponse(raw=line)
-
     # Exact-match tokens
     if line == "$INVALID_PARAMETER":
         return InvalidParameterResponse()
@@ -622,6 +621,12 @@ def parse_line(line: str) -> ParsedResponse:
         return FactoryResetResponse()
 
     # Regex-based parsing
+    if m := _RE_LINEFEED.match(line):
+        return LinefeedResponse(mode=LinefeedMode(m.group(1)))
+
+    if not line.startswith("$"):
+        return RawResponse(raw=line)
+
     if m := _RE_BANK.match(line):
         return BankStatusResponse(bank=BankNumber(int(m.group(1))), state=BankState(m.group(2)))
     if m := _RE_BUTTON.match(line):
@@ -640,8 +645,6 @@ def parse_line(line: str) -> ParsedResponse:
         return AVRModeResponse(mode=AVRMode(m.group(1)))
     if m := _RE_FEEDBACK.match(line):
         return FeedbackResponse(mode=FeedbackMode(m.group(1)))
-    if m := _RE_LINEFEED.match(line):
-        return LinefeedResponse(mode=LinefeedMode(m.group(1)))
     if m := _RE_BRIGHTNESS.match(line):
         return BrightnessResponse(level=Brightness(m.group(1)))
     if m := _RE_SCROLL.match(line):
@@ -1065,8 +1068,14 @@ class JuicerClient:
 
     def set_feedback(self, mode: str | FeedbackMode) -> list[ParsedResponse]:
         """Send ``!SET_FEEDBACK``."""
-        self._send(cmd_set_feedback(mode))
-        return [self._expect_one(FeedbackResponse, context="!SET_FEEDBACK")]
+        target = FeedbackMode(mode.upper() if isinstance(mode, str) else mode.value)
+        self._send(cmd_set_feedback(target))
+        try:
+            return [self._expect_one(FeedbackResponse, timeout=0.5, context="!SET_FEEDBACK")]
+        except JuicerTimeoutError:
+            if target == FeedbackMode.OFF:
+                return []
+            raise
 
     def set_linefeed(self, mode: str | LinefeedMode) -> list[ParsedResponse]:
         """Send ``!SET_LINEFEED``."""
@@ -1182,6 +1191,8 @@ class JuicerClient:
         resp = self._recv_parsed()
         if isinstance(resp, VoltageResponse):
             return resp
+        if isinstance(resp, VoltsInResponse):
+            return VoltageResponse(volts=resp.volts)
         raise ProtocolError(f"Expected VoltageResponse, got {resp!r}")
 
     def query_loadstat(self) -> LoadResponse:
@@ -1222,7 +1233,13 @@ class JuicerClient:
         cfg = ListConfigResponse()
         responses = self._recv_variable(min_lines=9, max_lines=10, context="?LIST_CONFIG")
         for resp in responses:
-            if isinstance(resp, BatteryThresholdResponse | BatteryThresholdGlobalResponse):
+            if isinstance(resp, BatteryThresholdResponse):
+                cfg.bthresh = resp.level
+                if resp.bank == BankNumber.BANK3:
+                    cfg.bthresh3 = resp.level
+                elif resp.bank == BankNumber.BANK4:
+                    cfg.bthresh4 = resp.level
+            elif isinstance(resp, BatteryThresholdGlobalResponse):
                 cfg.bthresh = resp.level
             elif isinstance(resp, BuzzerResponse):
                 cfg.buzzer = resp.mode

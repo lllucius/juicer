@@ -33,7 +33,7 @@
  * Action (!):
  *   ALL_ON, ALL_OFF, SWITCH, SET_BATTHRESH, SET_BUZZER, SET_AVR,
  *   SET_FEEDBACK, SET_LINEFEED, SET_BRIGHT, SET_SCROLLMODE,
- *   SET_SLEEPMODE, RESET_ALL, SET_NORMALVOLT
+ *   SET_SLEEPMODE, RESET_ALL
  *
  * Query (?):
  *   ID, OUTLETSTAT, POWERSTAT, POWER, CURRENT, VOLTAGE, LOADSTAT,
@@ -96,34 +96,23 @@
 /* ── Emulator state ──────────────────────────────────────────────────────── */
 
 static bool s_bank[4]    = { false, false, false, false }; /* 0-based [0..3] = banks 1..4 */
-static int  s_bthresh[2] = { 20, 20 };                     /* [0]=bank3, [1]=bank4 */
+static int  s_bthresh[2] = { 60, 40 };                     /* [0]=bank3, [1]=bank4 */
 
-static bool s_buzzer     = true;
-static int  s_avr_mode   = 0;    /* 0=OFF  1=STANDARD  2=SENSITIVE */
+static bool s_buzzer     = false;
+static int  s_avr_mode   = 1;    /* 0=OFF  1=STANDARD  2=SENSITIVE */
 static bool s_feedback   = true;
 static bool s_linefeed   = false;
 static int  s_brightness = 100;  /* valid: 100, 75, 50, 25 */
-static int  s_scroll     = 0;    /* 0=5SEC  1=10SEC  2=OFF */
+static int  s_scroll     = 2;    /* 0=5SEC  1=10SEC  2=OFF */
 static int  s_sleep      = 2;    /* 0=30SEC  1=60SEC  2=OFF */
-static int  s_normalvolt = 230;  /* 220, 230, or 240 */
 
 /* Simulated sensor readings — edit and re-flash to test different conditions */
-static float s_volts_in  = 230.0f;
-static float s_volts_out = 230.0f;
-static float s_watts     = 150.0f;
-static float s_current   = 0.65f;
-static float s_voltage   = 230.0f;
-static float s_load      = 10.0f;
-static int   s_battery   = 85;
-static int   s_backup_time = 60; /* minutes of backup remaining */
-
-typedef enum {
-    BATTSTATE_FULL       = 0,
-    BATTSTATE_CHARGE     = 1,
-    BATTSTATE_DISCHARGE  = 2,
-} battstate_t;
-
-static battstate_t s_battstate = BATTSTATE_FULL;
+static int   s_volts_in  = 120;
+static int   s_volts_out = 121;
+static int   s_watts     = 0;
+static float s_current   = 0.0f;
+static int   s_load      = 0;
+static int   s_battery   = 100;
 
 /* ── Output helpers ──────────────────────────────────────────────────────── */
 
@@ -188,7 +177,7 @@ static void invalid_param(void)
 static void send_bank(int n)
 {
     char tmp[24];
-    snprintf(tmp, sizeof(tmp), "$BANK %d = %s", n, s_bank[BANK_IDX(n)] ? "ON" : "OFF");
+    snprintf(tmp, sizeof(tmp), "$BANK%d=%s", n, s_bank[BANK_IDX(n)] ? "ON" : "OFF");
     sendln(tmp);
 }
 
@@ -231,6 +220,7 @@ static void handle_all_on(void)
         s_bank[i] = true;
     }
     send_all_banks();
+    sendln("$BUTTON=ON");
 }
 
 static void handle_all_off(void)
@@ -239,6 +229,7 @@ static void handle_all_off(void)
         s_bank[i] = false;
     }
     send_all_banks();
+    sendln("$BUTTON=ON");
 }
 
 /* "SWITCH <bank> <ON|OFF>" */
@@ -276,7 +267,7 @@ static void handle_set_batthresh(const char *args)
     level = ((level + 9) / 10) * 10;
     s_bthresh[BTHRESH_IDX(b)] = level;
     char tmp[32];
-    snprintf(tmp, sizeof(tmp), "$BTHRESH %d = %d", b, s_bthresh[BTHRESH_IDX(b)]);
+    snprintf(tmp, sizeof(tmp), "$BTHRESH%d=%03d", b, s_bthresh[BTHRESH_IDX(b)]);
     sendln(tmp);
 }
 
@@ -292,7 +283,7 @@ static void handle_set_buzzer(const char *args)
         return;
     }
     char tmp[24];
-    snprintf(tmp, sizeof(tmp), "$BUZZER = %s", s_buzzer ? "ON" : "OFF");
+    snprintf(tmp, sizeof(tmp), "$BUZZER=%s", s_buzzer ? "ON" : "OFF");
     sendln(tmp);
 }
 
@@ -305,7 +296,7 @@ static void handle_set_avr(const char *args)
     else if (strcmp(args, "SENSITIVE") == 0) s_avr_mode = 2;
     else { invalid_param(); return; }
     char tmp[32];
-    snprintf(tmp, sizeof(tmp), "$AVR = %s", modes[s_avr_mode]);
+    snprintf(tmp, sizeof(tmp), "$AVR=%s", modes[s_avr_mode]);
     sendln(tmp);
 }
 
@@ -315,9 +306,9 @@ static void handle_set_feedback(const char *args)
     if (strcmp(args, "ON") == 0)       s_feedback = true;
     else if (strcmp(args, "OFF") == 0) s_feedback = false;
     else { invalid_param(); return; }
-    char tmp[24];
-    snprintf(tmp, sizeof(tmp), "$FEEDBACK = %s", s_feedback ? "ON" : "OFF");
-    sendln(tmp);
+    if (s_feedback) {
+        sendln("$FEEDBACK=ON");
+    }
 }
 
 /* "SET_LINEFEED <ON|OFF>" */
@@ -327,7 +318,7 @@ static void handle_set_linefeed(const char *args)
     else if (strcmp(args, "OFF") == 0) s_linefeed = false;
     else { invalid_param(); return; }
     char tmp[24];
-    snprintf(tmp, sizeof(tmp), "$LINEFEED = %s", s_linefeed ? "ON" : "OFF");
+    snprintf(tmp, sizeof(tmp), "%sLINEFEED=%s", s_linefeed ? "" : "$", s_linefeed ? "ON" : "OFF");
     sendln(tmp);
 }
 
@@ -346,7 +337,7 @@ static void handle_set_bright(const char *args)
     if (!ok) { invalid_param(); return; }
     s_brightness = b;
     char tmp[24];
-    snprintf(tmp, sizeof(tmp), "$BRIGHTNESS = %03d", s_brightness);
+    snprintf(tmp, sizeof(tmp), "$BRIGHTNESS=%03d", s_brightness);
     sendln(tmp);
 }
 
@@ -359,7 +350,7 @@ static void handle_set_scrollmode(const char *args)
     else if (strcmp(args, "OFF") == 0)   s_scroll = 2;
     else { invalid_param(); return; }
     char tmp[32];
-    snprintf(tmp, sizeof(tmp), "$SCROLL_MODE = %s", modes[s_scroll]);
+    snprintf(tmp, sizeof(tmp), "$SCROLL_MODE=%s", modes[s_scroll]);
     sendln(tmp);
 }
 
@@ -372,7 +363,7 @@ static void handle_set_sleepmode(const char *args)
     else if (strcmp(args, "OFF") == 0)   s_sleep = 2;
     else { invalid_param(); return; }
     char tmp[32];
-    snprintf(tmp, sizeof(tmp), "$SLEEP_MODE = %s", modes[s_sleep]);
+    snprintf(tmp, sizeof(tmp), "$SLEEP_MODE=%s", modes[s_sleep]);
     sendln(tmp);
 }
 
@@ -380,36 +371,25 @@ static void handle_set_sleepmode(const char *args)
 static void handle_reset_all(void)
 {
     for (int i = 0; i < 4; i++) { s_bank[i] = false; }
-    s_bthresh[0] = s_bthresh[1] = 20;
-    s_buzzer     = true;
-    s_avr_mode   = 0;
+    s_bthresh[0] = 60;
+    s_bthresh[1] = 40;
+    s_buzzer     = false;
+    s_avr_mode   = 1;
     s_feedback   = true;
     s_linefeed   = false;
     s_brightness = 100;
-    s_scroll     = 0;
+    s_scroll     = 2;
     s_sleep      = 2;
-    s_normalvolt = 230;
     sendln("$FACTORY SETTINGS RESTORED");
-}
-
-/* "SET_NORMALVOLT <220|230|240>" */
-static void handle_set_normalvolt(const char *args)
-{
-    int v = atoi(args);
-    if (v != 220 && v != 230 && v != 240) { invalid_param(); return; }
-    s_normalvolt = v;
-    char tmp[24];
-    snprintf(tmp, sizeof(tmp), "$NORMALVOLT = %d", s_normalvolt);
-    sendln(tmp);
 }
 
 /* ── Query handlers ───────────────────────────────────────────────────────── */
 
 static void handle_query_id(void)
 {
-    sendln("$Furman");
-    sendln("$F1500-UPS E");
-    sendln("$FW1.00 (Emulator)");
+    sendln("$FURMAN");
+    sendln("$F1500-UPS");
+    sendln("$AJ1365");
 }
 
 static void handle_query_outletstat(void)
@@ -419,62 +399,43 @@ static void handle_query_outletstat(void)
 
 static void handle_query_powerstat(void)
 {
-    sendln("$PWR = NORMAL");
+    sendln("$PWR=NORMAL");
 }
 
 static void handle_query_power(void)
 {
     char tmp[32];
-    snprintf(tmp, sizeof(tmp), "$VOLTS_IN = %.1f",  s_volts_in);  sendln(tmp);
-    snprintf(tmp, sizeof(tmp), "$VOLTS_OUT = %.1f", s_volts_out); sendln(tmp);
-    snprintf(tmp, sizeof(tmp), "$WATTS = %.1f",     s_watts);     sendln(tmp);
-    snprintf(tmp, sizeof(tmp), "$CURRENT = %.2f",   s_current);   sendln(tmp);
+    snprintf(tmp, sizeof(tmp), "$VOLTS_IN=%03d",  s_volts_in);  sendln(tmp);
+    snprintf(tmp, sizeof(tmp), "$VOLTS_OUT=%03d", s_volts_out); sendln(tmp);
+    snprintf(tmp, sizeof(tmp), "$WATTS=%04d",     s_watts);     sendln(tmp);
+    snprintf(tmp, sizeof(tmp), "$CURRENT=%04.1f", s_current);   sendln(tmp);
 }
 
 static void handle_query_current(void)
 {
     char tmp[32];
-    snprintf(tmp, sizeof(tmp), "$CURRENT = %.2f", s_current);
+    snprintf(tmp, sizeof(tmp), "$CURRENT=%04.1f", s_current);
     sendln(tmp);
 }
 
 static void handle_query_voltage(void)
 {
     char tmp[32];
-    snprintf(tmp, sizeof(tmp), "$VOLTAGE = %.1f", s_voltage);
+    snprintf(tmp, sizeof(tmp), "$VOLTS_IN=%03d", s_volts_in);
     sendln(tmp);
 }
 
 static void handle_query_loadstat(void)
 {
     char tmp[32];
-    snprintf(tmp, sizeof(tmp), "$LOAD = %.1f", s_load);
+    snprintf(tmp, sizeof(tmp), "$LOAD=%03d", s_load);
     sendln(tmp);
 }
 
 static void handle_query_batterystat(void)
 {
     char tmp[24];
-    snprintf(tmp, sizeof(tmp), "$BATTERY = %d", s_battery);
-    sendln(tmp);
-}
-
-static void handle_query_battstate(void)
-{
-    static const char *states[] = {
-        [BATTSTATE_FULL]      = "FULL",
-        [BATTSTATE_CHARGE]    = "CHARGE",
-        [BATTSTATE_DISCHARGE] = "DISCHARGE",
-    };
-    char tmp[32];
-    snprintf(tmp, sizeof(tmp), "$BATTSTATE = %s", states[s_battstate]);
-    sendln(tmp);
-}
-
-static void handle_query_time(void)
-{
-    char tmp[24];
-    snprintf(tmp, sizeof(tmp), "$TIME = %d", s_backup_time);
+    snprintf(tmp, sizeof(tmp), "$BATTERY=%03d", s_battery);
     sendln(tmp);
 }
 
@@ -485,16 +446,15 @@ static void handle_query_list_config(void)
     static const char *sleep_modes[]  = { "30SEC", "60SEC", "OFF" };
     char tmp[48];
 
-    snprintf(tmp, sizeof(tmp), "$BUZZER = %s",       s_buzzer ? "ON" : "OFF");       sendln(tmp);
-    snprintf(tmp, sizeof(tmp), "$AVR = %s",           avr_modes[s_avr_mode]);         sendln(tmp);
-    snprintf(tmp, sizeof(tmp), "$FEEDBACK = %s",      s_feedback ? "ON" : "OFF");     sendln(tmp);
-    snprintf(tmp, sizeof(tmp), "$LINEFEED = %s",      s_linefeed ? "ON" : "OFF");     sendln(tmp);
-    snprintf(tmp, sizeof(tmp), "$BRIGHTNESS = %03d",  s_brightness);                  sendln(tmp);
-    snprintf(tmp, sizeof(tmp), "$SCROLL_MODE = %s",   scroll_modes[s_scroll]);        sendln(tmp);
-    snprintf(tmp, sizeof(tmp), "$SLEEP_MODE = %s",    sleep_modes[s_sleep]);          sendln(tmp);
-    snprintf(tmp, sizeof(tmp), "$NORMALVOLT = %d",    s_normalvolt);                  sendln(tmp);
-    snprintf(tmp, sizeof(tmp), "$BTHRESH 3 = %d",     s_bthresh[BTHRESH_IDX(3)]);    sendln(tmp);
-    snprintf(tmp, sizeof(tmp), "$BTHRESH 4 = %d",     s_bthresh[BTHRESH_IDX(4)]);    sendln(tmp);
+    snprintf(tmp, sizeof(tmp), "$BTHRESH3=%03d",      s_bthresh[BTHRESH_IDX(3)]);     sendln(tmp);
+    snprintf(tmp, sizeof(tmp), "$BTHRESH4=%03d",      s_bthresh[BTHRESH_IDX(4)]);     sendln(tmp);
+    snprintf(tmp, sizeof(tmp), "$BUZZER=%s",          s_buzzer ? "ON" : "OFF");       sendln(tmp);
+    snprintf(tmp, sizeof(tmp), "$AVR=%s",             avr_modes[s_avr_mode]);         sendln(tmp);
+    snprintf(tmp, sizeof(tmp), "$FEEDBACK=%s",        s_feedback ? "ON" : "OFF");     sendln(tmp);
+    snprintf(tmp, sizeof(tmp), "$LINEFEED=%s",        s_linefeed ? "ON" : "OFF");     sendln(tmp);
+    snprintf(tmp, sizeof(tmp), "$BRIGHTNESS=%03d",    s_brightness);                  sendln(tmp);
+    snprintf(tmp, sizeof(tmp), "$SCROLL_MODE=%s",     scroll_modes[s_scroll]);        sendln(tmp);
+    snprintf(tmp, sizeof(tmp), "$SLEEP_MODE=%s",      sleep_modes[s_sleep]);          sendln(tmp);
 }
 
 static void handle_query_help(void)
@@ -502,17 +462,16 @@ static void handle_query_help(void)
     static const char *cmds[] = {
         "!ALL_ON",
         "!ALL_OFF",
-        "!SWITCH <bank> <ON|OFF>",
-        "!SET_BATTHRESH <bank> <level>",
-        "!SET_BUZZER <ON|OFF>",
-        "!SET_AVR <OFF|STANDARD|SENSITIVE>",
-        "!SET_FEEDBACK <ON|OFF>",
-        "!SET_LINEFEED <ON|OFF>",
-        "!SET_BRIGHT <100|075|050|025>",
-        "!SET_SCROLLMODE <5SEC|10SEC|OFF>",
-        "!SET_SLEEPMODE <30SEC|60SEC|OFF>",
+        "!SWITCH",
+        "!SET_BATTHRESH",
+        "!SET_BUZZER",
+        "!SET_AVR",
+        "!SET_FEEDBACK",
+        "!SET_LINEFEED",
         "!RESET_ALL",
-        "!SET_NORMALVOLT <220|230|240>",
+        "!SET_BRIGHT",
+        "!SET_SCROLLMODE",
+        "!SET_SLEEPMODE",
         "?ID",
         "?OUTLETSTAT",
         "?POWERSTAT",
@@ -521,8 +480,6 @@ static void handle_query_help(void)
         "?VOLTAGE",
         "?LOADSTAT",
         "?BATTERYSTAT",
-        "?BATTSTATE",
-        "?TIME",
         "?LIST_CONFIG",
         "?HELP",
         NULL
@@ -557,7 +514,6 @@ static void dispatch(const char *cmd)
         if (cmd_prefix(c, "SET_SCROLLMODE", &args))        { handle_set_scrollmode(args); return; }
         if (cmd_prefix(c, "SET_SLEEPMODE", &args))         { handle_set_sleepmode(args);  return; }
         if (cmd_exact(c, "RESET_ALL"))                     { handle_reset_all();          return; }
-        if (cmd_prefix(c, "SET_NORMALVOLT", &args))        { handle_set_normalvolt(args); return; }
 
     } else if (cmd[0] == '?') {
         const char *c = cmd + 1;
@@ -570,8 +526,6 @@ static void dispatch(const char *cmd)
         if (cmd_exact(c, "VOLTAGE"))     { handle_query_voltage();     return; }
         if (cmd_exact(c, "LOADSTAT"))    { handle_query_loadstat();    return; }
         if (cmd_exact(c, "BATTERYSTAT")) { handle_query_batterystat(); return; }
-        if (cmd_exact(c, "BATTSTATE"))   { handle_query_battstate();   return; }
-        if (cmd_exact(c, "TIME"))        { handle_query_time();        return; }
         if (cmd_exact(c, "LIST_CONFIG")) { handle_query_list_config(); return; }
         if (cmd_exact(c, "HELP"))        { handle_query_help();        return; }
     }

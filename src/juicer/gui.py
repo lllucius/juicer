@@ -1551,8 +1551,13 @@ if _PYSIDE6_AVAILABLE:
                     "sleep_mode": cfg.sleep_mode.value if cfg.sleep_mode else None,
                     "normalvolt": cfg.normalvolt.value if cfg.normalvolt else None,
                 }
-                if cfg.bthresh is not None:
+                if cfg.bthresh3 is not None:
+                    values["bthresh3"] = cfg.bthresh3
+                elif cfg.bthresh is not None:
                     values["bthresh3"] = cfg.bthresh
+                if cfg.bthresh4 is not None:
+                    values["bthresh4"] = cfg.bthresh4
+                elif cfg.bthresh is not None:
                     values["bthresh4"] = cfg.bthresh
                 return values
 
