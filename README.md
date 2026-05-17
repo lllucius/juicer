@@ -711,6 +711,17 @@ python -m juicer --help
 python -m juicer.gui
 ```
 
+### Capturing raw Furman serial responses
+
+To collect real-device prompt characters and unparsed response bytes, run:
+
+```bash
+python scripts/capture_furman_protocol.py --port COM3 --output furman-capture.txt --yes
+```
+
+The capture script issues the full command set, including outlet switching and
+`!RESET_ALL`, so only run it when it is safe for attached equipment.
+
 ### Design principles worth knowing
 
 #### 1. Keep hardware access isolated
