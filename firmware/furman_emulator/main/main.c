@@ -96,7 +96,7 @@
 /* ── Emulator state ──────────────────────────────────────────────────────── */
 
 static bool s_bank[4]    = { false, false, false, false }; /* 0-based [0..3] = banks 1..4 */
-static int  s_bthresh[2] = { 60, 40 };                     /* [0]=bank3, [1]=bank4 */
+static int  s_bthresh[2] = { 60, 40 };                     /* real defaults: [0]=bank3, [1]=bank4 */
 
 static bool s_buzzer     = false;
 static int  s_avr_mode   = 1;    /* 0=OFF  1=STANDARD  2=SENSITIVE */
@@ -106,7 +106,7 @@ static int  s_brightness = 100;  /* valid: 100, 75, 50, 25 */
 static int  s_scroll     = 2;    /* 0=5SEC  1=10SEC  2=OFF */
 static int  s_sleep      = 2;    /* 0=30SEC  1=60SEC  2=OFF */
 
-/* Simulated sensor readings — edit and re-flash to test different conditions */
+/* Simulated sensor readings — real-device sample defaults; edit and re-flash to test other conditions */
 static int   s_volts_in  = 120;
 static int   s_volts_out = 121;
 static int   s_watts     = 0;

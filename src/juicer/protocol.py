@@ -206,7 +206,7 @@ class BatteryLevelResponse(BaseModel):
 
 
 class BatteryThresholdResponse(BaseModel):
-    """``$BTHRESH<bank>=<level>``."""
+    """``$BTHRESH <bank> = <level>`` or ``$BTHRESH<bank>=<level>``."""
 
     bank: BankNumber
     level: int
