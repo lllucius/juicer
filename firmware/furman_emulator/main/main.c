@@ -106,7 +106,7 @@ static int  s_brightness = 100;  /* valid: 100, 75, 50, 25 */
 static int  s_scroll     = 2;    /* 0=5SEC  1=10SEC  2=OFF */
 static int  s_sleep      = 2;    /* 0=30SEC  1=60SEC  2=OFF */
 
-/* Simulated sensor readings — real-device sample defaults; edit and re-flash to test other conditions */
+/* Simulated sensor readings — whole-number firmware fields are ints; current is fractional. */
 static int   s_volts_in  = 120;
 static int   s_volts_out = 121;
 static int   s_watts     = 0;
