@@ -866,10 +866,9 @@ def test_client_switch_reads_only_expected_bank_response() -> None:
 
     result = client.switch(2, "ON")
 
-    # One read for the bank-status line, plus the drain loop that
-    # consumes the queued follow-up while looking for the trailing ``>``
-    # prompt and then one more read that raises JuicerTimeoutError to end
-    # the drain (the FakeTransport ran out of queued data).
+    # One read for the bank-status line, plus the drain loop that consumes
+    # the queued follow-up and one more read that raises JuicerTimeoutError
+    # to end the drain.
     assert t.read_count == 3
     assert isinstance(result[0], BankStatusResponse)
     with pytest.raises(JuicerTimeoutError):
