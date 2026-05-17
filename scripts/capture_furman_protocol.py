@@ -8,7 +8,7 @@ import sys
 import time
 from collections.abc import Iterable
 from pathlib import Path
-from typing import TextIO
+from typing import Protocol, TextIO
 
 COMMANDS: tuple[str, ...] = (
     "!ALL_OFF",
@@ -32,6 +32,7 @@ COMMANDS: tuple[str, ...] = (
     "!SET_FEEDBACK OFF",
     "!SET_LINEFEED ON",
     "!SET_LINEFEED OFF",
+    # Capture both observed brightness forms: unpadded and zero-padded.
     "!SET_BRIGHT 100",
     "!SET_BRIGHT 25",
     "!SET_BRIGHT 75",
@@ -57,6 +58,13 @@ COMMANDS: tuple[str, ...] = (
 )
 
 
+class ReadablePort(Protocol):
+    """Minimal serial-port interface used by the quiet-read loop."""
+
+    def read(self, size: int = 1) -> bytes:
+        """Read up to size bytes."""
+
+
 class Tee:
     """Write capture output to stdout and, optionally, a file."""
 
@@ -76,15 +84,14 @@ def escaped(data: bytes) -> str:
     )
 
 
-def read_until_quiet(serial_port: object, quiet_timeout: float, max_wait: float) -> bytes:
+def read_until_quiet(serial_port: ReadablePort, quiet_timeout: float, max_wait: float) -> bytes:
     """Read bytes until the line is quiet or max_wait expires."""
-    read = getattr(serial_port, "read")
     data = bytearray()
     deadline = time.monotonic() + max_wait
     quiet_deadline = time.monotonic() + quiet_timeout
 
     while time.monotonic() < deadline and time.monotonic() < quiet_deadline:
-        chunk = read(1)
+        chunk = serial_port.read(1)
         if chunk:
             data.extend(chunk)
             quiet_deadline = time.monotonic() + quiet_timeout
