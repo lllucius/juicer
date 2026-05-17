@@ -318,6 +318,7 @@ static void handle_set_linefeed(const char *args)
     else if (strcmp(args, "OFF") == 0) s_linefeed = false;
     else { invalid_param(); return; }
     char tmp[24];
+    /* Real firmware omits '$' only when confirming LINEFEED=ON. */
     snprintf(tmp, sizeof(tmp), "%sLINEFEED=%s", s_linefeed ? "" : "$", s_linefeed ? "ON" : "OFF");
     sendln(tmp);
 }

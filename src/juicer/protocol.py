@@ -1068,12 +1068,12 @@ class JuicerClient:
 
     def set_feedback(self, mode: str | FeedbackMode) -> list[ParsedResponse]:
         """Send ``!SET_FEEDBACK``."""
-        target = FeedbackMode(mode.upper() if isinstance(mode, str) else mode.value)
-        self._send(cmd_set_feedback(target))
+        feedback_mode = FeedbackMode(mode.upper() if isinstance(mode, str) else mode.value)
+        self._send(cmd_set_feedback(feedback_mode))
         try:
             return [self._expect_one(FeedbackResponse, timeout=0.5, context="!SET_FEEDBACK")]
         except JuicerTimeoutError:
-            if target == FeedbackMode.OFF:
+            if feedback_mode == FeedbackMode.OFF:
                 return []
             raise
 
