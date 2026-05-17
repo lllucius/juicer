@@ -493,6 +493,16 @@ static void handle_query_help(void)
 
 /* ── Main command dispatcher ──────────────────────────────────────────────── */
 
+/*
+ * Send the '>' prompt byte that the real Furman F1500-UPS firmware transmits
+ * after every command response (including commands that produce no data lines).
+ * The Python client reads until it sees this byte to detect end-of-response.
+ */
+static void send_prompt(void)
+{
+    transport_write(">", 1);
+}
+
 static void dispatch(const char *cmd)
 {
     /* Skip any leading whitespace (defensive; the protocol doesn't send it). */
@@ -504,35 +514,36 @@ static void dispatch(const char *cmd)
     if (cmd[0] == '!') {
         const char *c = cmd + 1;
 
-        if (cmd_exact(c, "ALL_ON"))                        { handle_all_on();             return; }
-        if (cmd_exact(c, "ALL_OFF"))                       { handle_all_off();            return; }
-        if (cmd_prefix(c, "SWITCH", &args))                { handle_switch(args);         return; }
-        if (cmd_prefix(c, "SET_BATTHRESH", &args))         { handle_set_batthresh(args);  return; }
-        if (cmd_prefix(c, "SET_BUZZER", &args))            { handle_set_buzzer(args);     return; }
-        if (cmd_prefix(c, "SET_AVR", &args))               { handle_set_avr(args);        return; }
-        if (cmd_prefix(c, "SET_FEEDBACK", &args))          { handle_set_feedback(args);   return; }
-        if (cmd_prefix(c, "SET_LINEFEED", &args))          { handle_set_linefeed(args);   return; }
-        if (cmd_prefix(c, "SET_BRIGHT", &args))            { handle_set_bright(args);     return; }
-        if (cmd_prefix(c, "SET_SCROLLMODE", &args))        { handle_set_scrollmode(args); return; }
-        if (cmd_prefix(c, "SET_SLEEPMODE", &args))         { handle_set_sleepmode(args);  return; }
-        if (cmd_exact(c, "RESET_ALL"))                     { handle_reset_all();          return; }
+        if (cmd_exact(c, "ALL_ON"))                        { handle_all_on();             send_prompt(); return; }
+        if (cmd_exact(c, "ALL_OFF"))                       { handle_all_off();            send_prompt(); return; }
+        if (cmd_prefix(c, "SWITCH", &args))                { handle_switch(args);         send_prompt(); return; }
+        if (cmd_prefix(c, "SET_BATTHRESH", &args))         { handle_set_batthresh(args);  send_prompt(); return; }
+        if (cmd_prefix(c, "SET_BUZZER", &args))            { handle_set_buzzer(args);     send_prompt(); return; }
+        if (cmd_prefix(c, "SET_AVR", &args))               { handle_set_avr(args);        send_prompt(); return; }
+        if (cmd_prefix(c, "SET_FEEDBACK", &args))          { handle_set_feedback(args);   send_prompt(); return; }
+        if (cmd_prefix(c, "SET_LINEFEED", &args))          { handle_set_linefeed(args);   send_prompt(); return; }
+        if (cmd_prefix(c, "SET_BRIGHT", &args))            { handle_set_bright(args);     send_prompt(); return; }
+        if (cmd_prefix(c, "SET_SCROLLMODE", &args))        { handle_set_scrollmode(args); send_prompt(); return; }
+        if (cmd_prefix(c, "SET_SLEEPMODE", &args))         { handle_set_sleepmode(args);  send_prompt(); return; }
+        if (cmd_exact(c, "RESET_ALL"))                     { handle_reset_all();          send_prompt(); return; }
 
     } else if (cmd[0] == '?') {
         const char *c = cmd + 1;
 
-        if (cmd_exact(c, "ID"))          { handle_query_id();          return; }
-        if (cmd_exact(c, "OUTLETSTAT"))  { handle_query_outletstat();  return; }
-        if (cmd_exact(c, "POWERSTAT"))   { handle_query_powerstat();   return; }
-        if (cmd_exact(c, "POWER"))       { handle_query_power();       return; }
-        if (cmd_exact(c, "CURRENT"))     { handle_query_current();     return; }
-        if (cmd_exact(c, "VOLTAGE"))     { handle_query_voltage();     return; }
-        if (cmd_exact(c, "LOADSTAT"))    { handle_query_loadstat();    return; }
-        if (cmd_exact(c, "BATTERYSTAT")) { handle_query_batterystat(); return; }
-        if (cmd_exact(c, "LIST_CONFIG")) { handle_query_list_config(); return; }
-        if (cmd_exact(c, "HELP"))        { handle_query_help();        return; }
+        if (cmd_exact(c, "ID"))          { handle_query_id();          send_prompt(); return; }
+        if (cmd_exact(c, "OUTLETSTAT"))  { handle_query_outletstat();  send_prompt(); return; }
+        if (cmd_exact(c, "POWERSTAT"))   { handle_query_powerstat();   send_prompt(); return; }
+        if (cmd_exact(c, "POWER"))       { handle_query_power();       send_prompt(); return; }
+        if (cmd_exact(c, "CURRENT"))     { handle_query_current();     send_prompt(); return; }
+        if (cmd_exact(c, "VOLTAGE"))     { handle_query_voltage();     send_prompt(); return; }
+        if (cmd_exact(c, "LOADSTAT"))    { handle_query_loadstat();    send_prompt(); return; }
+        if (cmd_exact(c, "BATTERYSTAT")) { handle_query_batterystat(); send_prompt(); return; }
+        if (cmd_exact(c, "LIST_CONFIG")) { handle_query_list_config(); send_prompt(); return; }
+        if (cmd_exact(c, "HELP"))        { handle_query_help();        send_prompt(); return; }
     }
 
     invalid_param();
+    send_prompt();
 }
 
 /* ── Application entry point ─────────────────────────────────────────────── */

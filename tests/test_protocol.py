@@ -45,6 +45,7 @@ from juicer.protocol import (
     NormalVoltResponse,
     PowerStatus,
     PowerStatusResponse,
+    PromptReceived,
     ProtocolError,
     RawResponse,
     ScrollMode,
@@ -135,6 +136,62 @@ def test_read_line_discards_optional_lf_after_cr() -> None:
 
     assert first == "$PWR = NORMAL"
     assert second == "$BATTERY = 85"
+
+
+def test_read_line_raises_prompt_received_when_gt_is_first_byte() -> None:
+    """Real firmware appends '>' (0x3E) as response terminator; must raise PromptReceived."""
+    transport = SerialTransport(port="COM1")
+    # Single-line response followed by '>' prompt, as seen on real device
+    transport._serial = _StubSerial(b"$BUZZER=ON\r>")
+
+    line = transport.read_line()
+    assert line == "$BUZZER=ON"
+
+    with pytest.raises(PromptReceived):
+        transport.read_line()
+
+
+def test_read_line_raises_prompt_received_for_prompt_only_response() -> None:
+    """Commands like !SET_LINEFEED return only '>' with no preceding data line."""
+    transport = SerialTransport(port="COM1")
+    transport._serial = _StubSerial(b">")
+
+    with pytest.raises(PromptReceived):
+        transport.read_line()
+
+
+def test_read_line_handles_multi_line_response_ending_with_prompt() -> None:
+    """Multi-line response: all data lines returned, then PromptReceived on '>'."""
+    transport = SerialTransport(port="COM1")
+    transport._serial = _StubSerial(b"$BANK1=ON\r$BANK2=ON\r$BANK3=ON\r$BANK4=ON\r>")
+
+    assert transport.read_line() == "$BANK1=ON"
+    assert transport.read_line() == "$BANK2=ON"
+    assert transport.read_line() == "$BANK3=ON"
+    assert transport.read_line() == "$BANK4=ON"
+    with pytest.raises(PromptReceived):
+        transport.read_line()
+
+
+def test_fake_transport_enqueue_prompt_raises_prompt_received() -> None:
+    t = FakeTransport()
+    t.open()
+    t.enqueue_response("$BUZZER=ON")
+    t.enqueue_prompt()
+
+    assert t.read_line() == "$BUZZER=ON"
+    with pytest.raises(PromptReceived):
+        t.read_line()
+
+
+def test_fake_transport_enqueue_prompt_only() -> None:
+    """enqueue_prompt() with no data lines simulates a prompt-only response."""
+    t = FakeTransport()
+    t.open()
+    t.enqueue_prompt()
+
+    with pytest.raises(PromptReceived):
+        t.read_line()
 
 
 def test_serial_open_sets_write_timeout() -> None:
@@ -702,6 +759,21 @@ def test_client_all_on() -> None:
     assert all(r.state == BankState.ON for r in result)
 
 
+def test_client_all_on_real_firmware_includes_button_and_prompt() -> None:
+    """Real firmware !ALL_ON: $BANK1-4=ON then $BUTTON=ON then '>'."""
+    t = FakeTransport()
+    t.open()
+    t.enqueue_responses(["$BANK1=ON", "$BANK2=ON", "$BANK3=ON", "$BANK4=ON", "$BUTTON=ON"])
+    t.enqueue_prompt()
+    client = JuicerClient(t)
+    result = client.all_on()
+    bank_results = [r for r in result if isinstance(r, BankStatusResponse)]
+    button_results = [r for r in result if isinstance(r, ButtonResponse)]
+    assert len(bank_results) == 4
+    assert all(r.state == BankState.ON for r in bank_results)
+    assert len(button_results) == 1
+
+
 def test_client_all_off() -> None:
     t = _open_fake(
         "$BANK 1 = OFF", "$BANK 2 = OFF", "$BANK 3 = OFF", "$BANK 4 = OFF"
@@ -710,6 +782,20 @@ def test_client_all_off() -> None:
     result = client.all_off()
     assert t.last_command == "!ALL_OFF\r"
     assert all(r.state == BankState.OFF for r in result)
+
+
+def test_client_all_off_real_firmware_includes_button_and_prompt() -> None:
+    """Real firmware !ALL_OFF: $BANK1-4=OFF then $BUTTON=ON then '>'."""
+    t = FakeTransport()
+    t.open()
+    t.enqueue_responses(["$BANK1=OFF", "$BANK2=OFF", "$BANK3=OFF", "$BANK4=OFF", "$BUTTON=ON"])
+    t.enqueue_prompt()
+    client = JuicerClient(t)
+    result = client.all_off()
+    bank_results = [r for r in result if isinstance(r, BankStatusResponse)]
+    button_results = [r for r in result if isinstance(r, ButtonResponse)]
+    assert all(r.state == BankState.OFF for r in bank_results)
+    assert len(button_results) == 1
 
 
 def test_client_switch_on() -> None:
@@ -827,6 +913,16 @@ def test_client_set_feedback_off_accepts_real_device_no_response() -> None:
     assert result == []
 
 
+def test_client_set_feedback_off_accepts_prompt_only() -> None:
+    """Real firmware: !SET_FEEDBACK OFF → '>' (prompt only)."""
+    t = FakeTransport()
+    t.open()
+    t.enqueue_prompt()
+    client = JuicerClient(t)
+    result = client.set_feedback("OFF")
+    assert result == []
+
+
 def test_client_set_linefeed_off() -> None:
     t = _open_fake("$LINEFEED = OFF")
     client = JuicerClient(t)
@@ -834,6 +930,17 @@ def test_client_set_linefeed_off() -> None:
     assert t.last_command == "!SET_LINEFEED OFF\r"
     assert isinstance(result[0], LinefeedResponse)
     assert result[0].mode == LinefeedMode.OFF
+
+
+def test_client_set_linefeed_prompt_only() -> None:
+    """Real firmware: !SET_LINEFEED ON/OFF → only '>' (no data line)."""
+    t = FakeTransport()
+    t.open()
+    t.enqueue_prompt()
+    client = JuicerClient(t)
+    result = client.set_linefeed("ON")
+    assert t.last_command == "!SET_LINEFEED ON\r"
+    assert result == []
 
 
 def test_client_set_bright_075() -> None:
@@ -853,6 +960,16 @@ def test_client_set_bright_all_levels() -> None:
         assert t.last_command == f"!SET_BRIGHT {level.value}\r"
 
 
+def test_client_set_bright_prompt_only() -> None:
+    """Real firmware: !SET_BRIGHT → only '>' (no data line)."""
+    t = FakeTransport()
+    t.open()
+    t.enqueue_prompt()
+    client = JuicerClient(t)
+    result = client.set_bright("100")
+    assert result == []
+
+
 def test_client_set_scrollmode_10sec() -> None:
     t = _open_fake("$SCROLL_MODE = 10SEC")
     client = JuicerClient(t)
@@ -862,6 +979,16 @@ def test_client_set_scrollmode_10sec() -> None:
     assert result[0].mode == ScrollMode.SEC10
 
 
+def test_client_set_scrollmode_prompt_only() -> None:
+    """Real firmware: !SET_SCROLLMODE → only '>' (no data line)."""
+    t = FakeTransport()
+    t.open()
+    t.enqueue_prompt()
+    client = JuicerClient(t)
+    result = client.set_scrollmode("OFF")
+    assert result == []
+
+
 def test_client_set_sleepmode_30sec() -> None:
     t = _open_fake("$SLEEP_MODE = 30SEC")
     client = JuicerClient(t)
@@ -869,6 +996,17 @@ def test_client_set_sleepmode_30sec() -> None:
     assert t.last_command == "!SET_SLEEPMODE 30SEC\r"
     assert isinstance(result[0], SleepModeResponse)
     assert result[0].mode == SleepMode.SEC30
+
+
+def test_client_set_sleepmode_prompt_only() -> None:
+    """Real firmware: !SET_SLEEPMODE → only '>' (no data line)."""
+    t = FakeTransport()
+    t.open()
+    t.enqueue_prompt()
+    client = JuicerClient(t)
+    result = client.set_sleepmode("OFF")
+    assert result == []
+
 
 
 def test_client_reset_all() -> None:
