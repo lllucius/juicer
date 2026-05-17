@@ -300,7 +300,7 @@ static void handle_set_avr(const char *args)
     sendln(tmp);
 }
 
-/* "SET_FEEDBACK <ON|OFF>" */
+/* "SET_FEEDBACK <ON|OFF>" — real firmware does not confirm OFF. */
 static void handle_set_feedback(const char *args)
 {
     if (strcmp(args, "ON") == 0)       s_feedback = true;
@@ -387,6 +387,7 @@ static void handle_reset_all(void)
 
 static void handle_query_id(void)
 {
+    /* The third line is the real firmware identifier observed from hardware. */
     sendln("$FURMAN");
     sendln("$F1500-UPS");
     sendln("$AJ1365");
