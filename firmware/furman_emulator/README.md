@@ -113,22 +113,19 @@ juicer-gui
 | `!SET_SCROLLMODE <5SEC\|10SEC\|OFF>` | Set display scroll mode |
 | `!SET_SLEEPMODE <30SEC\|60SEC\|OFF>` | Set display sleep mode |
 | `!RESET_ALL` | Restore factory defaults |
-| `!SET_NORMALVOLT <220\|230\|240>` | Set nominal mains voltage |
 
 ### Query commands (`?`)
 
 | Command | Response |
 |---------|----------|
-| `?ID` | Three lines: manufacturer, model, firmware |
-| `?OUTLETSTAT` | Four `$BANK n = ON\|OFF` lines |
-| `?POWERSTAT` | `$PWR = NORMAL` |
+| `?ID` | `$FURMAN`, `$F1500-UPS`, `$AJ1365` |
+| `?OUTLETSTAT` | Four `$BANKn=ON\|OFF` lines |
+| `?POWERSTAT` | `$PWR=NORMAL` |
 | `?POWER` | `$VOLTS_IN`, `$VOLTS_OUT`, `$WATTS`, `$CURRENT` |
-| `?CURRENT` | `$CURRENT = <amps>` |
-| `?VOLTAGE` | `$VOLTAGE = <volts>` |
-| `?LOADSTAT` | `$LOAD = <percent>` |
-| `?BATTERYSTAT` | `$BATTERY = <percent>` |
-| `?BATTSTATE` | `$BATTSTATE = <FULL\|CHARGE\|DISCHARGE>` |
-| `?TIME` | `$TIME = <minutes>` |
+| `?CURRENT` | `$CURRENT=<amps>` |
+| `?VOLTAGE` | `$VOLTS_IN=<volts>` |
+| `?LOADSTAT` | `$LOAD=<percent>` |
+| `?BATTERYSTAT` | `$BATTERY=<percent>` |
 | `?LIST_CONFIG` | All configuration settings |
 | `?HELP` | List of all supported commands |
 
@@ -142,15 +139,12 @@ The emulator returns fixed, plausible readings for sensor queries:
 
 | Metric | Value |
 |--------|-------|
-| Volts in | 230.0 V |
-| Volts out | 230.0 V |
-| Load watts | 150.0 W |
-| Current | 0.65 A |
-| Voltage | 230.0 V |
-| Load | 10.0 % |
-| Battery | 85 % |
-| Battery state | FULL |
-| Backup time | 60 min |
+| Volts in | 120 V |
+| Volts out | 121 V |
+| Load watts | 0 W |
+| Current | 0.0 A |
+| Load | 0 % |
+| Battery | 100 % |
 | Power status | NORMAL |
 
 Sensor values are compile-time constants (`s_*` variables near the top of

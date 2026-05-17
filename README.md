@@ -654,6 +654,18 @@ transport's `read_line()` implementation intentionally preserves the first byte
 of the next response if the byte after CR is **not** LF. That prevents line
 boundary corruption when the device sends CR-only responses back-to-back.
 
+### Real-device response quirks
+
+The real F1500-UPS firmware differs from the printed manual in several places:
+
+- many responses omit spaces, such as `$BANK1=ON`, `$BUZZER=OFF`, and
+  `$BTHRESH3=060`;
+- `!ALL_ON` and `!ALL_OFF` also report `$BUTTON=ON`;
+- `!SET_FEEDBACK OFF` may not return a confirmation line;
+- `!SET_LINEFEED ON` confirms as `LINEFEED=ON` without the leading `$`;
+- `?VOLTAGE` reports `$VOLTS_IN=<value>`;
+- `?LIST_CONFIG` reports bank 3 and bank 4 thresholds separately.
+
 ### High-level client behavior
 
 `JuicerClient` offers blocking methods that:
