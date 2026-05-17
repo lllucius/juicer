@@ -1592,7 +1592,7 @@ if _PYSIDE6_AVAILABLE:
 
             def apply() -> object:
                 """Send each config-setting command and then reload status text."""
-                normalvolt_skipped = False
+                normal_volt_skipped = False
                 self._client.set_buzzer(cast(str, values["buzzer"]))
                 self._client.set_avr(cast(str, values["avr"]))
                 self._client.set_feedback(cast(str, values["feedback"]))
@@ -1603,16 +1603,20 @@ if _PYSIDE6_AVAILABLE:
                 try:
                     self._client.set_normalvolt(cast(str, values["normalvolt"]))
                 except UnsupportedCommandError:
-                    normalvolt_skipped = True
+                    normal_volt_skipped = True
                     logger.info("Skipping unsupported !SET_NORMALVOLT")
                 self._client.set_batthresh(3, cast(int, values["bthresh3"]))
                 self._client.set_batthresh(4, cast(int, values["bthresh4"]))
                 notice = (
                     "Normal voltage unsupported by device; skipped"
-                    if normalvolt_skipped
+                    if normal_volt_skipped
                     else None
                 )
-                return self._collect_status(self._client), notice
+                result: tuple[dict[str, str], str | None] = (
+                    self._collect_status(self._client),
+                    notice,
+                )
+                return result
 
             def success(result: object) -> None:
                 """Refresh status panels after device settings are applied."""
