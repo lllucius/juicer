@@ -838,6 +838,16 @@ class SerialTransport(Transport):
         return self._serial is not None and self._serial.is_open
 
 
+class _PromptSentinel:
+    """Internal marker type used by :class:`FakeTransport` to simulate the ``>`` prompt.
+
+    A singleton instance (:attr:`FakeTransport._PROMPT`) is queued by
+    :meth:`FakeTransport.enqueue_prompt` so that :meth:`FakeTransport.read_line`
+    can raise :class:`PromptReceived` exactly as :class:`SerialTransport` does
+    when it receives the 0x3E byte from the real device.
+    """
+
+
 class FakeTransport(Transport):
     """In-memory transport for testing — no serial port needed.
 
@@ -852,12 +862,12 @@ class FakeTransport(Transport):
 
     def __init__(self) -> None:
         """Initialize an empty, closed in-memory transport."""
-        self._responses: deque[str | object] = deque()
+        self._responses: deque[str | _PromptSentinel] = deque()
         self._written: list[str] = []
         self._open = False
 
-    # Sentinel queued by enqueue_prompt() to simulate the device '>' character.
-    _PROMPT: object = object()
+    # Singleton sentinel queued by enqueue_prompt() to simulate '>' character.
+    _PROMPT: _PromptSentinel = _PromptSentinel()
 
     def open(self) -> None:
         """Mark the fake transport as open for subsequent reads and writes."""
@@ -1125,10 +1135,15 @@ class JuicerClient:
         self._send(cmd_set_feedback(feedback_mode))
         try:
             return [self._expect_one(FeedbackResponse, timeout=0.5, context="!SET_FEEDBACK")]
-        except (JuicerTimeoutError, PromptReceived):
+        except PromptReceived:
+            # A bare '>' prompt with no data line is valid only for OFF.
             if feedback_mode == FeedbackMode.OFF:
                 return []
-            raise JuicerTimeoutError("!SET_FEEDBACK ON: no response within timeout")
+            raise
+        except JuicerTimeoutError:
+            if feedback_mode == FeedbackMode.OFF:
+                return []
+            raise
 
     def set_linefeed(self, mode: str | LinefeedMode) -> list[ParsedResponse]:
         """Send ``!SET_LINEFEED``.
