@@ -37,6 +37,7 @@ from juicer.config import (
     SequenceConfig,
     TomlStore,
 )
+from juicer.protocol import UnsupportedCommandError
 
 logger = logging.getLogger(__name__)
 
@@ -1342,8 +1343,6 @@ if _PYSIDE6_AVAILABLE:
 
         def _collect_status(self, client: Any) -> dict[str, str]:
             """Gather best-effort status text for every overview and status-panel field."""
-            from juicer.protocol import UnsupportedCommandError
-
             status: dict[str, str] = {}
             try:
                 identity = client.query_id()
@@ -1593,8 +1592,6 @@ if _PYSIDE6_AVAILABLE:
 
             def apply() -> object:
                 """Send each config-setting command and then reload status text."""
-                from juicer.protocol import UnsupportedCommandError
-
                 normalvolt_skipped = False
                 self._client.set_buzzer(cast(str, values["buzzer"]))
                 self._client.set_avr(cast(str, values["avr"]))
