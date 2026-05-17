@@ -1595,6 +1595,7 @@ if _PYSIDE6_AVAILABLE:
                 """Send each config-setting command and then reload status text."""
                 from juicer.protocol import UnsupportedCommandError
 
+                normalvolt_skipped = False
                 self._client.set_buzzer(cast(str, values["buzzer"]))
                 self._client.set_avr(cast(str, values["avr"]))
                 self._client.set_feedback(cast(str, values["feedback"]))
@@ -1605,15 +1606,21 @@ if _PYSIDE6_AVAILABLE:
                 try:
                     self._client.set_normalvolt(cast(str, values["normalvolt"]))
                 except UnsupportedCommandError:
+                    normalvolt_skipped = True
                     logger.info("Skipping unsupported !SET_NORMALVOLT")
                 self._client.set_batthresh(3, cast(int, values["bthresh3"]))
                 self._client.set_batthresh(4, cast(int, values["bthresh4"]))
-                return self._collect_status(self._client)
+                status = self._collect_status(self._client)
+                if normalvolt_skipped:
+                    status["config_notice"] = "Normal voltage unsupported by device; skipped"
+                return status
 
             def success(result: object) -> None:
                 """Refresh status panels after device settings are applied."""
-                self._apply_status_result(cast(dict[str, str], result))
-                self.status_bar.showMessage("Device configuration applied")
+                status = cast(dict[str, str], result)
+                notice = status.pop("config_notice", None)
+                self._apply_status_result(status)
+                self.status_bar.showMessage(notice or "Device configuration applied")
 
             def error(message: str) -> None:
                 """Report a failure while applying configuration to the UPS."""

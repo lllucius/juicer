@@ -1150,6 +1150,21 @@ class JuicerClient:
             return resp
         raise ProtocolError(f"{label}: expected {expected_type.__name__}, got {resp!r}")
 
+    def _expect_one_or_unsupported(
+        self,
+        expected_type: type[T],
+        *,
+        context: str,
+        timeout: float = 2.0,
+    ) -> T:
+        """Read one response, mapping ``$INVALID_PARAMETER`` to unsupported."""
+        resp = self._recv_parsed(timeout)
+        if isinstance(resp, InvalidParameterResponse):
+            raise UnsupportedCommandError(f"{context}: unsupported by this firmware")
+        if isinstance(resp, expected_type):
+            return resp
+        raise ProtocolError(f"{context}: expected {expected_type.__name__}, got {resp!r}")
+
     def _expect_bank_status(
         self,
         bank: int | BankNumber,
@@ -1338,12 +1353,12 @@ class JuicerClient:
     def set_normalvolt(self, voltage: str | NormalVolt) -> list[ParsedResponse]:
         """Send ``!SET_NORMALVOLT``."""
         self._send(cmd_set_normalvolt(voltage))
-        resp = self._recv_parsed()
-        if isinstance(resp, InvalidParameterResponse):
-            raise UnsupportedCommandError("!SET_NORMALVOLT: unsupported by this firmware")
-        if isinstance(resp, NormalVoltResponse):
-            return [resp]
-        raise ProtocolError(f"!SET_NORMALVOLT: expected NormalVoltResponse, got {resp!r}")
+        return [
+            self._expect_one_or_unsupported(
+                NormalVoltResponse,
+                context="!SET_NORMALVOLT",
+            )
+        ]
 
     # ── Queries ───────────────────────────────────────────────────────
 
@@ -1458,23 +1473,19 @@ class JuicerClient:
     def query_battery_state(self) -> BatteryStateResponse:
         """Send ``?BATTSTATE``."""
         self._send(query_battstate())
-        resp = self._recv_parsed()
-        if isinstance(resp, InvalidParameterResponse):
-            raise UnsupportedCommandError("?BATTSTATE: unsupported by this firmware")
-        if isinstance(resp, BatteryStateResponse):
-            return resp
-        raise ProtocolError(f"Expected BatteryStateResponse, got {resp!r}")
+        return self._expect_one_or_unsupported(
+            BatteryStateResponse,
+            context="?BATTSTATE",
+        )
 
     @_with_prompt_drain
     def query_backup_time(self) -> BackupTimeResponse:
         """Send ``?TIME``."""
         self._send(query_time())
-        resp = self._recv_parsed()
-        if isinstance(resp, InvalidParameterResponse):
-            raise UnsupportedCommandError("?TIME: unsupported by this firmware")
-        if isinstance(resp, BackupTimeResponse):
-            return resp
-        raise ProtocolError(f"Expected BackupTimeResponse, got {resp!r}")
+        return self._expect_one_or_unsupported(
+            BackupTimeResponse,
+            context="?TIME",
+        )
 
     @_with_prompt_drain
     def query_list_config(self) -> ListConfigResponse:
