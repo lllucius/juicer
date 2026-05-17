@@ -1610,15 +1610,16 @@ if _PYSIDE6_AVAILABLE:
                     logger.info("Skipping unsupported !SET_NORMALVOLT")
                 self._client.set_batthresh(3, cast(int, values["bthresh3"]))
                 self._client.set_batthresh(4, cast(int, values["bthresh4"]))
-                status = self._collect_status(self._client)
-                if normalvolt_skipped:
-                    status["config_notice"] = "Normal voltage unsupported by device; skipped"
-                return status
+                notice = (
+                    "Normal voltage unsupported by device; skipped"
+                    if normalvolt_skipped
+                    else None
+                )
+                return self._collect_status(self._client), notice
 
             def success(result: object) -> None:
                 """Refresh status panels after device settings are applied."""
-                status = cast(dict[str, str], result)
-                notice = status.pop("config_notice", None)
+                status, notice = cast(tuple[dict[str, str], str | None], result)
                 self._apply_status_result(status)
                 self.status_bar.showMessage(notice or "Device configuration applied")
 
