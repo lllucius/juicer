@@ -134,6 +134,7 @@ def _request_elevated_service_command(command: ServiceCommand) -> None:
     sei.lpVerb = "runas"
     sei.lpFile = sys.executable
     sei.lpParameters = params
+    sei.lpDirectory = _service_package_parent()
     sei.nShow = SW_SHOWNORMAL
 
     if not shell_execute_ex(ctypes.byref(sei)):
@@ -167,6 +168,22 @@ def _service_log_path(name: str) -> Path:
 
     config_path = TomlStore().path
     return config_path.with_name(f"{name}.log")
+
+
+def _service_package_parent() -> str:
+    """Return the directory that must be importable to load ``juicer.service``."""
+    return str(Path(__file__).resolve().parents[1])
+
+
+def _service_python_class_string() -> str:
+    """Return a pywin32 class string that also works from source checkouts.
+
+    ``pythonservice.exe`` supports a ``path\\module.Class`` class string and
+    prepends that path to ``sys.path`` before importing the service class.  This
+    keeps services installed from an unpacked source tree importable when the
+    package has not been installed into site-packages.
+    """
+    return f"{_service_package_parent()}\\{__name__}.JuicerService"
 
 
 @contextmanager
@@ -394,7 +411,7 @@ def install_service(*, elevate: bool = True) -> None:
         logger.info("Service '%s' installation delegated to elevated process", SERVICE_NAME)
         return
     kwargs: dict[str, object] = dict(
-        pythonClassString=f"{__name__}.JuicerService",
+        pythonClassString=_service_python_class_string(),
         serviceName=SERVICE_NAME,
         displayName=SERVICE_DISPLAY_NAME,
         description=SERVICE_DESCRIPTION,

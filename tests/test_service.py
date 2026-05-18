@@ -240,7 +240,10 @@ def test_install_service_uses_native_python_service_host(
     service_module.install_service()
 
     assert installed_kwargs["exeName"] == str(pythonservice_exe)
-    assert installed_kwargs["pythonClassString"] == "juicer.service.JuicerService"
+    assert installed_kwargs["pythonClassString"] == service_module._service_python_class_string()
+    assert str(installed_kwargs["pythonClassString"]).endswith(
+        "\\juicer.service.JuicerService"
+    )
 
 
 def test_install_service_falls_back_to_pywin32_default_when_pythonservice_not_found(
@@ -324,3 +327,45 @@ def test_elevated_service_command_dispatches_without_requesting_elevation(
     service_module._run_service_command_without_elevation("install")
 
     assert calls == [False]
+
+
+def test_elevated_service_command_runs_from_importable_package_parent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service_module = _import_service_with_fake_pywin32()
+    captured: dict[str, object] = {}
+
+    class ShellExecuteEx:
+        argtypes: object = None
+        restype: object = None
+
+        def __call__(self, pointer: object) -> bool:
+            sei = pointer._obj
+            captured["lpDirectory"] = sei.lpDirectory
+            captured["lpParameters"] = sei.lpParameters
+            sei.hProcess = 100
+            return True
+
+    class FakeKernel32:
+        def WaitForSingleObject(self, handle: object, timeout: object) -> int:
+            return 0
+
+        def GetExitCodeProcess(self, handle: object, pointer: object) -> bool:
+            pointer._obj.value = 0
+            return True
+
+        def CloseHandle(self, handle: object) -> bool:
+            return True
+
+    fake_shell32 = types.SimpleNamespace(ShellExecuteExW=ShellExecuteEx())
+    fake_kernel32 = FakeKernel32()
+
+    def windows_dll(name: str) -> object | None:
+        return {"shell32": fake_shell32, "kernel32": fake_kernel32}.get(name)
+
+    monkeypatch.setattr(service_module, "_windows_dll", windows_dll)
+
+    service_module._request_elevated_service_command("install")
+
+    assert captured["lpDirectory"] == service_module._service_package_parent()
+    assert "--elevated-service-command install" in str(captured["lpParameters"])
