@@ -31,6 +31,8 @@ MANIFEST
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+# Exception: our hand-crafted PyInstaller spec for the standalone service exe.
+!scripts/juicer_service.spec
 
 # Installer logs
 pip-log.txt

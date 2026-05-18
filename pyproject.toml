@@ -76,5 +76,5 @@ disable_error_code = ["misc", "untyped-decorator"]
 # all attributes behind sys.platform == "win32" guards, so attribute accesses
 # (OpenKey, PlaySound, etc.) would raise [attr-defined] on non-Windows.
 # All callers already guard execution with _ensure_windows() / platform checks.
-module = ["juicer.config", "juicer.sequence"]
+module = ["juicer.config", "juicer.sequence", "juicer.service"]
 disable_error_code = ["attr-defined"]

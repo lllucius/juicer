@@ -13,9 +13,10 @@ import ctypes
 import logging
 import os
 import platform
-import site
 import subprocess
 import sys
+import tempfile
+import traceback
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -57,6 +58,7 @@ SERVICE_DISPLAY_NAME = "Juicer UPS Controller"
 SERVICE_DESCRIPTION = "Controls Furman F1500-UPS E outlet banks via RS-232 serial"
 SERVICE_DEPS = ["Serenum", "Serial"]
 
+
 # ──────────────────────────────────────────────────────────────────────
 # Service Framework (Windows-only at runtime)
 # ──────────────────────────────────────────────────────────────────────
@@ -73,7 +75,6 @@ if _WINDOWS:
         _PYWIN32_AVAILABLE = False
 else:
     _PYWIN32_AVAILABLE = False
-
 
 def _ensure_pywin32() -> None:
     """Raise a descriptive error when pywin32-backed service features are unavailable."""
@@ -112,7 +113,12 @@ def _is_user_admin() -> bool:
 
 
 def _request_elevated_service_command(command: ServiceCommand) -> None:
-    """Run a service management command through Windows UAC and wait for it."""
+    """Run a service management command through Windows UAC and wait for it.
+
+    The elevated subprocess writes any errors to a temporary log file whose
+    contents are included in the raised ``OSError`` so the GUI surfaces a real
+    diagnostic instead of just "exit code 1".
+    """
     if command not in _SERVICE_COMMANDS:
         raise ValueError(f"Unsupported elevated service command: {command}")
 
@@ -121,36 +127,67 @@ def _request_elevated_service_command(command: ServiceCommand) -> None:
     if shell32 is None or kernel32 is None:
         raise OSError("Unable to request elevated privileges on this platform")
 
-    params = subprocess.list2cmdline(
-        ["-m", "juicer.service", "--elevated-service-command", command]
-    )
-    shell_execute_ex = shell32.ShellExecuteExW
-    shell_execute_ex.argtypes = [ctypes.POINTER(SHELLEXECUTEINFO)]
-    shell_execute_ex.restype = ctypes.c_bool
-
-    sei = SHELLEXECUTEINFO()
-    sei.cbSize = ctypes.sizeof(SHELLEXECUTEINFO)
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS
-    sei.lpVerb = "runas"
-    sei.lpFile = sys.executable
-    sei.lpParameters = params
-    sei.nShow = SW_SHOWNORMAL
-
-    if not shell_execute_ex(ctypes.byref(sei)):
-        raise OSError("Windows elevation request was cancelled or failed")
-
+    log_fd, log_path_str = tempfile.mkstemp(prefix="juicer-elevated-", suffix=".log")
+    os.close(log_fd)
     try:
-        kernel32.WaitForSingleObject(sei.hProcess, INFINITE)
-        exit_code = ctypes.c_ulong()
-        if not kernel32.GetExitCodeProcess(sei.hProcess, ctypes.byref(exit_code)):
-            raise OSError("Unable to read elevated process exit code")
-        if exit_code.value != 0:
-            raise OSError(
-                f"Elevated service {command} failed with exit code {exit_code.value}; "
-                "run the command from an elevated console for details"
-            )
+        params = subprocess.list2cmdline(
+            [
+                "-m",
+                "juicer.service",
+                "--elevated-service-command",
+                command,
+                "--elevated-log-path",
+                log_path_str,
+            ]
+        )
+        shell_execute_ex = shell32.ShellExecuteExW
+        shell_execute_ex.argtypes = [ctypes.POINTER(SHELLEXECUTEINFO)]
+        shell_execute_ex.restype = ctypes.c_bool
+
+        sei = SHELLEXECUTEINFO()
+        sei.cbSize = ctypes.sizeof(SHELLEXECUTEINFO)
+        sei.fMask = SEE_MASK_NOCLOSEPROCESS
+        sei.lpVerb = "runas"
+        sei.lpFile = sys.executable
+        sei.lpParameters = params
+        # Start from the package parent so `python -m juicer.service` can import
+        # the source checkout even when the elevated process has a fresh cwd.
+        sei.lpDirectory = _service_package_parent()
+        sei.nShow = SW_SHOWNORMAL
+
+        if not shell_execute_ex(ctypes.byref(sei)):
+            raise OSError("Windows elevation request was cancelled or failed")
+
+        try:
+            kernel32.WaitForSingleObject(sei.hProcess, INFINITE)
+            exit_code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(sei.hProcess, ctypes.byref(exit_code)):
+                raise OSError("Unable to read elevated process exit code")
+            if exit_code.value != 0:
+                raise OSError(_format_elevated_failure(command, exit_code.value, log_path_str))
+        finally:
+            kernel32.CloseHandle(sei.hProcess)
     finally:
-        kernel32.CloseHandle(sei.hProcess)
+        try:
+            Path(log_path_str).unlink()
+        except OSError:
+            pass
+
+
+def _format_elevated_failure(command: str, exit_code: int, log_path: str) -> str:
+    """Build an OSError message that includes the captured subprocess log."""
+    details = ""
+    try:
+        details = Path(log_path).read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        details = ""
+    header = f"Elevated service {command} failed with exit code {exit_code}"
+    if details:
+        return f"{header}.\nDetails:\n{details}"
+    return (
+        f"{header}; run the command from an elevated console for details "
+        "(no output was captured from the elevated process)"
+    )
 
 
 def _request_elevation_if_needed(command: ServiceCommand, elevate: bool) -> bool:
@@ -161,34 +198,91 @@ def _request_elevation_if_needed(command: ServiceCommand, elevate: bool) -> bool
     return True
 
 
-def _service_log_path(name: str) -> Path:
-    """Return a service log path next to the TOML configuration."""
-    from juicer.config import TomlStore
+def _default_service_log_dir() -> Path:
+    """Return the default service log directory without importing juicer.config.
 
-    config_path = TomlStore().path
-    return config_path.with_name(f"{name}.log")
+    This mirrors the platform default used by the TOML config store but does
+    not import :mod:`juicer.config`, so it remains usable when configuration
+    loading itself fails.
+    """
+    if _WINDOWS:
+        base = os.environ.get("PROGRAMDATA")
+        if base:
+            return Path(base) / "Juicer"
+    return Path.home() / ".juicer"
+
+
+def _service_log_path(name: str) -> Path:
+    """Return a service log path next to the TOML configuration.
+
+    Falls back to :func:`_default_service_log_dir` if importing
+    :mod:`juicer.config` (or constructing :class:`TomlStore`) fails.  This
+    guarantees that early-startup logging works even when configuration
+    handling is broken — exactly the scenario that produced "no log files"
+    reports from the Windows service.
+    """
+    try:
+        from juicer.config import TomlStore
+
+        config_path = TomlStore().path
+        return config_path.with_name(f"{name}.log")
+    except (ImportError, OSError, RuntimeError) as exc:
+        logger.debug("Falling back to default service log directory: %s", exc)
+        return _default_service_log_dir() / f"{name}.log"
+
+
+def _install_service_log_handler(name: str) -> tuple[logging.Handler, Path] | None:
+    """Add a root-logger file handler for the service and return it.
+
+    Returns ``None`` if the log file cannot be created.  Callers are
+    responsible for removing the handler when the scope ends.
+    """
+    try:
+        path = _service_log_path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(path, encoding="utf-8")
+    except OSError:
+        return None
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    root_logger = logging.getLogger()
+    root_logger.addHandler(handler)
+    if root_logger.level == logging.NOTSET or root_logger.level > logging.INFO:
+        root_logger.setLevel(logging.INFO)
+    return handler, path
+
+
+def _remove_service_log_handler(handler: logging.Handler) -> None:
+    """Remove a previously installed service log handler from the root logger."""
+    logging.getLogger().removeHandler(handler)
+    handler.close()
+
+
+def _service_package_parent() -> str:
+    """Return the directory that must be importable to load ``juicer.service``."""
+    # service.py lives in the juicer package; the package parent is the import root.
+    return str(Path(__file__).resolve().parents[1])
 
 
 @contextmanager
 def _service_file_logging(name: str) -> Iterator[Path]:
     """Temporarily route service Python logging to a sequence-specific file."""
-    path = _service_log_path(name)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handler = logging.FileHandler(path, encoding="utf-8")
-    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
     root_logger = logging.getLogger()
-    root_logger.addHandler(handler)
     previous_level = root_logger.level
-    if previous_level > logging.INFO:
-        root_logger.setLevel(logging.INFO)
+    installed = _install_service_log_handler(name)
+    if installed is None:
+        # Logging setup failed (e.g. read-only filesystem in tests).  Yield a
+        # best-effort path so the contract is preserved.
+        path = _default_service_log_dir() / f"{name}.log"
+        yield path
+        return
+    handler, path = installed
     try:
         logger.info("Writing %s service log to %s", name, path)
         yield path
     finally:
         logger.info("Finished writing %s service log to %s", name, path)
-        root_logger.removeHandler(handler)
+        _remove_service_log_handler(handler)
         root_logger.setLevel(previous_level)
-        handler.close()
 
 
 class _Win32CancelToken:
@@ -288,41 +382,80 @@ if _PYWIN32_AVAILABLE:
             Startup intentionally remains synchronous: ``SERVICE_RUNNING`` is
             reported only after outlet boot has completed, while periodic
             ``SERVICE_START_PENDING`` updates keep the SCM informed.
+
+            A root-logger file handler is installed at the very top of this
+            method so that *any* failure during service startup — including
+            failures that happen before the boot sequence runs — is recorded
+            in ``service.log`` next to the configuration file.  Without this
+            handler, early failures left ``C:\\ProgramData\\Juicer`` empty and
+            users had no way to diagnose service start timeouts.
             """
+            installed = _install_service_log_handler("service")
+            service_log_handler = installed[0] if installed is not None else None
+            service_log_path = installed[1] if installed is not None else None
             try:
-                self._reporting_start_pending = True
-                self._report_start_pending()
-                servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Running boot sequence")
-
-                try:
-                    _run_boot_sequence(
-                        progress_callback=self._report_start_pending,
-                        cancel=_Win32CancelToken(self.stop_event),
+                if service_log_path is not None:
+                    logger.info("Juicer service starting; log file: %s", service_log_path)
+                else:
+                    servicemanager.LogWarningMsg(
+                        f"{SERVICE_NAME}: Unable to open service.log for writing"
                     )
-                except Exception as exc:
-                    servicemanager.LogErrorMsg(f"{SERVICE_NAME}: Boot failed: {exc}")
-                    logger.error("Boot sequence failed: %s", exc)
-                    return
+                try:
+                    self._reporting_start_pending = True
+                    self._report_start_pending()
+                    servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Running boot sequence")
 
-                self._reporting_start_pending = False
-                self.ReportServiceStatus(win32service.SERVICE_RUNNING)
-                servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Service running")
-
-                # Block until stop event is signalled
-                win32event.WaitForSingleObject(self.stop_event, win32event.INFINITE)
-
-                # Run shutdown sequence after stop event unless SvcShutdown already did it.
-                if not self._shutdown_done:
-                    servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Running shutdown sequence")
                     try:
-                        _run_shutdown_sequence()
-                    except Exception as exc:
-                        servicemanager.LogErrorMsg(f"{SERVICE_NAME}: Shutdown failed: {exc}")
-                        logger.error("Shutdown sequence failed: %s", exc)
+                        _run_boot_sequence(
+                            progress_callback=self._report_start_pending,
+                            cancel=_Win32CancelToken(self.stop_event),
+                        )
+                    except Exception:
+                        servicemanager.LogErrorMsg(
+                            f"{SERVICE_NAME}: Boot failed: {traceback.format_exc()}"
+                        )
+                        logger.exception("Boot sequence failed")
+                        return
 
+                    self._reporting_start_pending = False
+                    self.ReportServiceStatus(win32service.SERVICE_RUNNING)
+                    servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Service running")
+
+                    # Block until stop event is signalled
+                    win32event.WaitForSingleObject(self.stop_event, win32event.INFINITE)
+
+                    # Run shutdown sequence after stop event unless SvcShutdown already did it.
+                    if not self._shutdown_done:
+                        servicemanager.LogInfoMsg(
+                            f"{SERVICE_NAME}: Running shutdown sequence"
+                        )
+                        try:
+                            _run_shutdown_sequence()
+                        except Exception:
+                            servicemanager.LogErrorMsg(
+                                f"{SERVICE_NAME}: Shutdown failed: {traceback.format_exc()}"
+                            )
+                            logger.exception("Shutdown sequence failed")
+
+                except Exception:
+                    # Catch-all so that unexpected failures (e.g. transient
+                    # import errors, SCM API failures) still produce a record
+                    # in service.log and the Windows event log.
+                    logger.exception("Unhandled exception in SvcDoRun")
+                    try:
+                        servicemanager.LogErrorMsg(
+                            f"{SERVICE_NAME}: Unhandled exception: {traceback.format_exc()}"
+                        )
+                    except Exception:
+                        pass
+                    raise
+
+                finally:
+                    self.ReportServiceStatus(win32service.SERVICE_STOPPED)
+                    servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Service stopped")
             finally:
-                self.ReportServiceStatus(win32service.SERVICE_STOPPED)
-                servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Service stopped")
+                if service_log_handler is not None:
+                    _remove_service_log_handler(service_log_handler)
 
         def SvcStop(self) -> None:
             """Handle SERVICE_CONTROL_STOP."""
@@ -341,8 +474,10 @@ if _PYWIN32_AVAILABLE:
             self._shutdown_done = True
             try:
                 _run_shutdown_sequence()
-            except Exception as exc:
-                servicemanager.LogErrorMsg(f"{SERVICE_NAME}: Shutdown failed: {exc}")
+            except Exception:
+                servicemanager.LogErrorMsg(
+                    f"{SERVICE_NAME}: Shutdown failed: {traceback.format_exc()}"
+                )
             finally:
                 win32event.SetEvent(self.stop_event)
 
@@ -364,52 +499,66 @@ else:
 # ──────────────────────────────────────────────────────────────────────
 
 
-def _find_pythonservice_exe() -> str | None:
-    """Return the path to pythonservice.exe in its existing site-packages location.
+def _find_bundled_service_exe() -> str | None:
+    """Return the path to a standalone ``juicer_service.exe`` if one is present.
 
-    pywin32 normally tries to move pythonservice.exe next to the Python interpreter
-    so that the Service Control Manager can find it.  On Windows Store Python
-    installations that target directory is read-only, so the move fails with
-    "Access is denied."  Passing the already-installed path directly as ``exeName``
-    to :func:`win32serviceutil.InstallService` skips the relocation step entirely.
+    A PyInstaller-bundled ``juicer_service.exe`` is a self-contained service
+    executable that bundles Python, pywin32, and all Juicer dependencies.  It
+    acts as its own service host: the SCM starts it directly (no
+    ``pythonservice.exe`` involved), so the entire class of "Python DLL not
+    found / wrong interpreter / missing site-packages" failures is eliminated.
+
+    The search order is:
+
+    1. Same directory as ``sys.executable`` (covers venv ``Scripts/`` installs).
+    2. ``%PROGRAMDATA%\\Juicer\\`` (the same folder used for config and logs).
+
+    Returns the first existing path, or ``None`` when not found.
     """
-    search_dirs: list[str] = [os.path.join(sys.prefix, "Lib", "site-packages")]
-    if hasattr(site, "getsitepackages"):
-        search_dirs.extend(site.getsitepackages())
-    user_site = site.getusersitepackages()
-    if user_site:
-        search_dirs.append(user_site)
-
-    for site_dir in search_dirs:
-        candidate = os.path.join(site_dir, "win32", "pythonservice.exe")
-        if os.path.isfile(candidate):
-            return candidate
+    candidates: list[str] = [
+        os.path.join(os.path.dirname(sys.executable), "juicer_service.exe"),
+    ]
+    base = os.environ.get("PROGRAMDATA")
+    if base:
+        candidates.append(os.path.join(base, "Juicer", "juicer_service.exe"))
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
     return None
 
 
 def install_service(*, elevate: bool = True) -> None:
-    """Install the Juicer Windows service."""
+    """Install the Juicer Windows service from the bundled service executable."""
     _ensure_pywin32()
     if not _request_elevation_if_needed("install", elevate):
         logger.info("Service '%s' installation delegated to elevated process", SERVICE_NAME)
         return
+    bundled_exe = _find_bundled_service_exe()
+    if bundled_exe is None:
+        raise OSError(
+            "juicer_service.exe was not found. Build it with "
+            "scripts\\build-service.ps1, copy it next to python.exe or to "
+            "%PROGRAMDATA%\\Juicer\\juicer_service.exe, then run "
+            "'juicer service install' again."
+        )
     kwargs: dict[str, object] = dict(
-        pythonClassString=f"{__name__}.JuicerService",
         serviceName=SERVICE_NAME,
         displayName=SERVICE_DISPLAY_NAME,
         description=SERVICE_DESCRIPTION,
         startType=win32service.SERVICE_AUTO_START,
         serviceDeps=SERVICE_DEPS,
+        exeName=bundled_exe,
     )
-    # Locate pythonservice.exe in its current site-packages/win32/ directory and
-    # pass it directly. This keeps the service running under native Python and
-    # avoids pywin32's built-in relocation logic, which fails on Windows Store
-    # Python installs because the target directory is read-only ("Access is denied.").
-    pythonservice_exe = _find_pythonservice_exe()
-    if pythonservice_exe is not None:
-        kwargs["exeName"] = pythonservice_exe
+    logger.info(
+        "Registering bundled service executable at %s as the service binary",
+        bundled_exe,
+    )
     win32serviceutil.InstallService(**kwargs)
     logger.info("Service '%s' installed", SERVICE_NAME)
+    logger.info(
+        "Service is using %s; no external Python runtime is required at service start.",
+        bundled_exe,
+    )
 
 
 def uninstall_service(*, elevate: bool = True) -> None:
@@ -428,7 +577,18 @@ def start_service(*, elevate: bool = True) -> None:
     if not _request_elevation_if_needed("start", elevate):
         logger.info("Service '%s' start delegated to elevated process", SERVICE_NAME)
         return
-    win32serviceutil.StartService(SERVICE_NAME)
+    try:
+        win32serviceutil.StartService(SERVICE_NAME)
+    except Exception as exc:
+        log_path = _service_log_path("service")
+        boot_log_path = _service_log_path("boot")
+        raise OSError(
+            f"Failed to start service '{SERVICE_NAME}': {exc}\n"
+            f"Check the service log at {log_path} and the boot log at "
+            f"{boot_log_path}, and consult the Windows Event Viewer "
+            "(Windows Logs → Application) for entries from source "
+            f"'{SERVICE_NAME}'."
+        ) from exc
     logger.info("Service '%s' started", SERVICE_NAME)
 
 
@@ -495,11 +655,58 @@ def _run_service_command_without_elevation(command: str) -> None:
     handlers[service_command](elevate=False)
 
 
+def _run_elevated_command_with_logging(command: str, log_path: str | None) -> int:
+    """Run a service command in the elevated subprocess and capture failures.
+
+    Returns the desired process exit code.  When ``log_path`` is provided, any
+    captured exception traceback or printed output is written to that file so
+    the parent process can display a meaningful error message instead of just
+    "exit code 1".
+    """
+    buffer: list[str] = []
+
+    def emit(line: str) -> None:
+        buffer.append(line)
+        try:
+            print(line, file=sys.stderr)
+        except OSError:
+            pass
+
+    try:
+        _run_service_command_without_elevation(command)
+        return 0
+    except SystemExit as exc:
+        if isinstance(exc.code, int):
+            return exc.code
+        if exc.code is not None:
+            emit(str(exc.code))
+        return 1
+    except Exception:
+        emit(f"Elevated service {command} raised an exception:")
+        emit(traceback.format_exc().rstrip())
+        return 1
+    finally:
+        if log_path and buffer:
+            try:
+                Path(log_path).write_text("\n".join(buffer) + "\n", encoding="utf-8")
+            except OSError:
+                pass
+
+
 def main() -> None:
     """Entry point for ``python -m juicer.service``."""
-    if len(sys.argv) == 3 and sys.argv[1] == "--elevated-service-command":
-        _run_service_command_without_elevation(sys.argv[2])
-        return
+    argv = sys.argv[1:]
+    log_path: str | None = None
+    if "--elevated-log-path" in argv:
+        idx = argv.index("--elevated-log-path")
+        if idx + 1 >= len(argv):
+            print("--elevated-log-path requires a value", file=sys.stderr)
+            sys.exit(2)
+        log_path = argv[idx + 1]
+        del argv[idx : idx + 2]
+
+    if len(argv) == 2 and argv[0] == "--elevated-service-command":
+        sys.exit(_run_elevated_command_with_logging(argv[1], log_path))
 
     if _PYWIN32_AVAILABLE:
         win32serviceutil.HandleCommandLine(JuicerService)

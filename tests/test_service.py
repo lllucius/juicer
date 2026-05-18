@@ -24,6 +24,7 @@ def _import_service_with_fake_pywin32() -> types.ModuleType:
     servicemanager = types.SimpleNamespace(
         LogInfoMsg=lambda message: None,
         LogErrorMsg=lambda message: None,
+        LogWarningMsg=lambda message: None,
     )
     win32event = types.SimpleNamespace(
         CreateEvent=lambda *args: object(),
@@ -202,6 +203,23 @@ def test_service_boot_and_shutdown_logs_are_written_next_to_config(
     assert "shutdown sequence detail" in (tmp_path / "shutdown.log").read_text(encoding="utf-8")
 
 
+def test_svc_do_run_warns_when_service_log_cannot_be_opened(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service_module = _import_service_with_fake_pywin32()
+    warnings: list[str] = []
+
+    service_module._run_boot_sequence = lambda **kwargs: None
+    service_module._run_shutdown_sequence = lambda: None
+    monkeypatch.setattr(service_module, "_install_service_log_handler", lambda name: None)
+    monkeypatch.setattr(service_module.servicemanager, "LogWarningMsg", warnings.append)
+
+    service = service_module.JuicerService([])
+    service.SvcDoRun()
+
+    assert warnings == ["Juicer: Unable to open service.log for writing"]
+
+
 def test_cli_can_run_directly_from_source_directory() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     cli_dir = repo_root / "src" / "juicer"
@@ -221,44 +239,40 @@ def test_cli_can_run_directly_from_source_directory() -> None:
     assert "Juicer" in result.stdout
 
 
-def test_install_service_uses_native_python_service_host(
+def test_install_service_uses_bundled_service_executable(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     service_module = _import_service_with_fake_pywin32()
-    pythonservice_exe = tmp_path / "pythonservice.exe"
-    pythonservice_exe.write_bytes(b"")
+    service_exe = tmp_path / "juicer_service.exe"
+    service_exe.write_bytes(b"")
     installed_kwargs: dict[str, object] = {}
 
     def install_service(**kwargs: object) -> None:
         installed_kwargs.update(kwargs)
 
     monkeypatch.setattr(service_module, "_is_user_admin", lambda: True)
-    monkeypatch.setattr(service_module, "_find_pythonservice_exe", lambda: str(pythonservice_exe))
+    monkeypatch.setattr(service_module, "_find_bundled_service_exe", lambda: str(service_exe))
     monkeypatch.setattr(service_module.win32serviceutil, "InstallService", install_service)
 
     service_module.install_service()
 
-    assert installed_kwargs["exeName"] == str(pythonservice_exe)
-    assert installed_kwargs["pythonClassString"] == "juicer.service.JuicerService"
+    assert installed_kwargs["exeName"] == str(service_exe)
+    assert "pythonClassString" not in installed_kwargs
 
 
-def test_install_service_falls_back_to_pywin32_default_when_pythonservice_not_found(
+def test_install_service_requires_bundled_service_executable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service_module = _import_service_with_fake_pywin32()
-    installed_kwargs: dict[str, object] = {}
-
-    def install_service(**kwargs: object) -> None:
-        installed_kwargs.update(kwargs)
 
     monkeypatch.setattr(service_module, "_is_user_admin", lambda: True)
-    monkeypatch.setattr(service_module, "_find_pythonservice_exe", lambda: None)
-    monkeypatch.setattr(service_module.win32serviceutil, "InstallService", install_service)
+    monkeypatch.setattr(service_module, "_find_bundled_service_exe", lambda: None)
 
-    service_module.install_service()
+    with pytest.raises(OSError) as info:
+        service_module.install_service()
 
-    assert "exeName" not in installed_kwargs
+    assert "juicer_service.exe was not found" in str(info.value)
 
 
 def test_service_management_requests_elevation_when_not_admin(
@@ -291,8 +305,11 @@ def test_admin_check_defaults_to_not_elevated_when_status_is_unavailable() -> No
 
 def test_service_management_can_skip_elevation_request(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     service_module = _import_service_with_fake_pywin32()
+    service_exe = tmp_path / "juicer_service.exe"
+    service_exe.write_bytes(b"")
     installed_kwargs: dict[str, object] = {}
 
     def install_service(**kwargs: object) -> None:
@@ -302,6 +319,7 @@ def test_service_management_can_skip_elevation_request(
         raise AssertionError("unexpected elevation request")
 
     monkeypatch.setattr(service_module, "_is_user_admin", lambda: False)
+    monkeypatch.setattr(service_module, "_find_bundled_service_exe", lambda: str(service_exe))
     monkeypatch.setattr(service_module, "_request_elevated_service_command", fail_elevation)
     monkeypatch.setattr(service_module.win32serviceutil, "InstallService", install_service)
 
@@ -324,3 +342,260 @@ def test_elevated_service_command_dispatches_without_requesting_elevation(
     service_module._run_service_command_without_elevation("install")
 
     assert calls == [False]
+
+
+def test_elevated_service_command_runs_from_importable_package_parent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service_module = _import_service_with_fake_pywin32()
+    captured: dict[str, object] = {}
+
+    class ShellExecuteEx:
+        argtypes: object = None
+        restype: object = None
+
+        def __call__(self, pointer: object) -> bool:
+            sei = pointer._obj
+            captured["lpDirectory"] = sei.lpDirectory
+            captured["lpParameters"] = sei.lpParameters
+            sei.hProcess = 100
+            return True
+
+    class FakeKernel32:
+        def WaitForSingleObject(self, handle: object, timeout: object) -> int:
+            return 0
+
+        def GetExitCodeProcess(self, handle: object, pointer: object) -> bool:
+            pointer._obj.value = 0
+            return True
+
+        def CloseHandle(self, handle: object) -> bool:
+            return True
+
+    fake_shell32 = types.SimpleNamespace(ShellExecuteExW=ShellExecuteEx())
+    fake_kernel32 = FakeKernel32()
+
+    def windows_dll(name: str) -> object | None:
+        return {"shell32": fake_shell32, "kernel32": fake_kernel32}.get(name)
+
+    monkeypatch.setattr(service_module, "_windows_dll", windows_dll)
+
+    service_module._request_elevated_service_command("install")
+
+    assert captured["lpDirectory"] == service_module._service_package_parent()
+    params = str(captured["lpParameters"])
+    assert "--elevated-service-command install" in params
+    assert "--elevated-log-path" in params
+
+
+def test_elevated_service_command_failure_includes_subprocess_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Subprocess stderr captured to the log file must surface in the OSError."""
+    service_module = _import_service_with_fake_pywin32()
+
+    captured_log_path: dict[str, str] = {}
+
+    class ShellExecuteEx:
+        argtypes: object = None
+        restype: object = None
+
+        def __call__(self, pointer: object) -> bool:
+            sei = pointer._obj
+            params = str(sei.lpParameters)
+            tokens = params.split()
+            idx = tokens.index("--elevated-log-path")
+            log_path = tokens[idx + 1].strip('"')
+            captured_log_path["path"] = log_path
+            Path(log_path).write_text(
+                "Traceback (most recent call last):\n  ModuleNotFoundError: juicer\n",
+                encoding="utf-8",
+            )
+            sei.hProcess = 100
+            return True
+
+    class FakeKernel32:
+        def WaitForSingleObject(self, handle: object, timeout: object) -> int:
+            return 0
+
+        def GetExitCodeProcess(self, handle: object, pointer: object) -> bool:
+            pointer._obj.value = 1
+            return True
+
+        def CloseHandle(self, handle: object) -> bool:
+            return True
+
+    fake_shell32 = types.SimpleNamespace(ShellExecuteExW=ShellExecuteEx())
+    fake_kernel32 = FakeKernel32()
+
+    monkeypatch.setattr(
+        service_module,
+        "_windows_dll",
+        lambda name: {"shell32": fake_shell32, "kernel32": fake_kernel32}.get(name),
+    )
+
+    with pytest.raises(OSError) as info:
+        service_module._request_elevated_service_command("install")
+
+    message = str(info.value)
+    assert "exit code 1" in message
+    assert "ModuleNotFoundError" in message
+    # Temp log file should be removed on completion.
+    assert not Path(captured_log_path["path"]).exists()
+
+
+def test_elevated_service_command_failure_without_subprocess_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the subprocess writes nothing, the OSError mentions that fact."""
+    service_module = _import_service_with_fake_pywin32()
+
+    class ShellExecuteEx:
+        argtypes: object = None
+        restype: object = None
+
+        def __call__(self, pointer: object) -> bool:
+            pointer._obj.hProcess = 100
+            return True
+
+    class FakeKernel32:
+        def WaitForSingleObject(self, handle: object, timeout: object) -> int:
+            return 0
+
+        def GetExitCodeProcess(self, handle: object, pointer: object) -> bool:
+            pointer._obj.value = 1
+            return True
+
+        def CloseHandle(self, handle: object) -> bool:
+            return True
+
+    fake_shell32 = types.SimpleNamespace(ShellExecuteExW=ShellExecuteEx())
+    fake_kernel32 = FakeKernel32()
+    monkeypatch.setattr(
+        service_module,
+        "_windows_dll",
+        lambda name: {"shell32": fake_shell32, "kernel32": fake_kernel32}.get(name),
+    )
+
+    with pytest.raises(OSError) as info:
+        service_module._request_elevated_service_command("install")
+
+    assert "no output was captured" in str(info.value)
+
+
+def test_run_elevated_command_with_logging_writes_traceback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The elevated subprocess must capture exceptions to the shared log file."""
+    service_module = _import_service_with_fake_pywin32()
+    log_path = tmp_path / "elevated.log"
+
+    def boom(command: str) -> None:
+        raise RuntimeError("install exploded for testing")
+
+    monkeypatch.setattr(service_module, "_run_service_command_without_elevation", boom)
+
+    code = service_module._run_elevated_command_with_logging("install", str(log_path))
+
+    assert code == 1
+    contents = log_path.read_text(encoding="utf-8")
+    assert "install exploded for testing" in contents
+    assert "Traceback" in contents
+
+
+def test_run_elevated_command_with_logging_returns_zero_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    service_module = _import_service_with_fake_pywin32()
+    log_path = tmp_path / "elevated.log"
+
+    monkeypatch.setattr(
+        service_module,
+        "_run_service_command_without_elevation",
+        lambda command: None,
+    )
+
+    code = service_module._run_elevated_command_with_logging("install", str(log_path))
+
+    assert code == 0
+    assert not log_path.exists()
+
+
+def test_service_log_path_falls_back_when_config_import_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A broken config must not prevent service.log from being written."""
+    import juicer.service as service_module
+
+    monkeypatch.setattr(
+        service_module,
+        "_default_service_log_dir",
+        lambda: tmp_path / "fallback-juicer",
+    )
+    # Force the inner import to raise by shadowing juicer.config with a broken
+    # module that raises whenever TomlStore is constructed.
+    broken = types.ModuleType("juicer.config")
+
+    def broken_tomlstore(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("config import broken")
+
+    broken.TomlStore = broken_tomlstore  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "juicer.config", broken)
+
+    path = service_module._service_log_path("service")
+
+    assert path == tmp_path / "fallback-juicer" / "service.log"
+
+
+def test_install_service_log_handler_creates_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The early service log handler must create the log file on disk."""
+    import juicer.service as service_module
+
+    target = tmp_path / "logs" / "service.log"
+    monkeypatch.setattr(service_module, "_service_log_path", lambda name: target)
+
+    installed = service_module._install_service_log_handler("service")
+
+    assert installed is not None
+    handler, path = installed
+    try:
+        logging.getLogger().info("hello from the service")
+        handler.flush()
+        assert path == target
+        assert target.is_file()
+        assert "hello from the service" in target.read_text(encoding="utf-8")
+    finally:
+        service_module._remove_service_log_handler(handler)
+
+
+def test_start_service_failure_surfaces_diagnostic_hints(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Start failures must point users at the log files and Event Viewer."""
+    service_module = _import_service_with_fake_pywin32()
+
+    def boom(name: str) -> None:
+        raise RuntimeError("SCM timeout")
+
+    monkeypatch.setattr(service_module.win32serviceutil, "StartService", boom)
+    monkeypatch.setattr(service_module, "_is_user_admin", lambda: True)
+    monkeypatch.setattr(
+        service_module,
+        "_service_log_path",
+        lambda name: tmp_path / f"{name}.log",
+    )
+
+    with pytest.raises(OSError) as info:
+        service_module.start_service()
+
+    message = str(info.value)
+    assert "SCM timeout" in message
+    assert str(tmp_path / "service.log") in message
+    assert "Event Viewer" in message
