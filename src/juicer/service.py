@@ -173,6 +173,7 @@ def _service_log_path(name: str) -> Path:
 
 def _service_package_parent() -> str:
     """Return the directory that must be importable to load ``juicer.service``."""
+    # service.py lives in the juicer package; the package parent is the import root.
     return str(Path(__file__).resolve().parents[1])
 
 

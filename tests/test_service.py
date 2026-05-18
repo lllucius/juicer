@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import ntpath
 import os
 import subprocess
 import sys
@@ -240,7 +241,7 @@ def test_install_service_uses_native_python_service_host(
     service_module.install_service()
 
     assert installed_kwargs["exeName"] == str(pythonservice_exe)
-    class_path, class_name = str(installed_kwargs["pythonClassString"]).rsplit("\\", 1)
+    class_path, class_name = str(installed_kwargs["pythonClassString"]).rsplit(ntpath.sep, 1)
     assert class_path == service_module._service_package_parent()
     assert class_name == "juicer.service.JuicerService"
 
