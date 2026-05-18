@@ -528,6 +528,102 @@ def _find_pythonservice_exe() -> str | None:
     return None
 
 
+def _running_in_venv() -> bool:
+    """Return True when the current interpreter is running inside a virtual env."""
+    base_prefix = getattr(sys, "base_prefix", sys.prefix)
+    return os.path.normcase(sys.prefix) != os.path.normcase(base_prefix)
+
+
+def _compute_service_environment() -> list[str]:
+    """Build the ``Environment`` REG_MULTI_SZ entries for the installed service.
+
+    When Juicer is installed from a virtual environment, ``pythonservice.exe``
+    is launched by the SCM **without** venv activation: the venv's
+    ``site-packages`` directory is not on ``sys.path``, so importing
+    :mod:`juicer.service` (which transitively requires ``pydantic`` and other
+    third-party dependencies) fails before :meth:`SvcDoRun` ever runs.  The
+    symptom is SCM error 1053 with no entry in ``service.log``, because the
+    service process exits during module import.
+
+    Writing the current installer's ``sys.path`` as ``PYTHONPATH`` into the
+    service's environment registry value makes the service process inherit
+    the same import paths as the installer, which is exactly what is needed
+    for venv-based installs.  ``PYTHONHOME`` is also exported when running
+    from a venv so that Python's start-up resolves the venv's standard
+    library and ``site-packages`` correctly.
+
+    Only existing directory entries are included.  Empty / non-existent
+    entries (e.g. the current directory, zipapp paths, or missing site
+    directories) are filtered out so they do not pollute the service's
+    import path.
+    """
+    seen: set[str] = set()
+    paths: list[str] = []
+    for entry in sys.path:
+        if not entry:
+            continue
+        try:
+            if not os.path.isdir(entry):
+                continue
+        except OSError:
+            continue
+        normalized = os.path.normcase(os.path.normpath(entry))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        paths.append(entry)
+
+    env: list[str] = []
+    if paths:
+        env.append("PYTHONPATH=" + os.pathsep.join(paths))
+    if _running_in_venv():
+        env.append(f"PYTHONHOME={sys.prefix}")
+    return env
+
+
+def _write_service_environment(env_entries: list[str]) -> None:
+    """Write ``Environment`` REG_MULTI_SZ for the Juicer service.
+
+    The SCM merges this value into the service process's environment block at
+    start time, so any variable set here is visible to ``pythonservice.exe``
+    and the embedded Python interpreter it hosts.  This function is a no-op
+    when ``env_entries`` is empty or when the registry is unavailable (for
+    example on non-Windows systems used in tests).
+    """
+    if not env_entries:
+        return
+    try:
+        import winreg
+    except ImportError:
+        logger.debug("winreg unavailable; skipping service environment write")
+        return
+
+    key_path = rf"SYSTEM\CurrentControlSet\Services\{SERVICE_NAME}"
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            key_path,
+            0,
+            winreg.KEY_SET_VALUE,
+        ) as key:
+            winreg.SetValueEx(key, "Environment", 0, winreg.REG_MULTI_SZ, env_entries)
+    except OSError as exc:
+        # Don't fail the install just because we couldn't write the env block —
+        # the service may still work when installed against a system Python.
+        logger.warning(
+            "Unable to write service environment to registry "
+            "(HKLM\\%s\\Environment): %s",
+            key_path,
+            exc,
+        )
+        return
+    logger.info(
+        "Wrote %d service environment variable(s) to HKLM\\%s\\Environment",
+        len(env_entries),
+        key_path,
+    )
+
+
 def install_service(*, elevate: bool = True) -> None:
     """Install the Juicer Windows service."""
     _ensure_pywin32()
@@ -550,7 +646,19 @@ def install_service(*, elevate: bool = True) -> None:
     if pythonservice_exe is not None:
         kwargs["exeName"] = pythonservice_exe
     win32serviceutil.InstallService(**kwargs)
+    # Propagate the installer's sys.path (and PYTHONHOME for venv installs)
+    # into the service's environment so the embedded Python interpreter can
+    # import juicer and its third-party dependencies (pydantic, etc.) when
+    # the SCM launches pythonservice.exe.  Without this, a venv-based install
+    # always hits SCM 1053 because module import fails before SvcDoRun runs.
+    _write_service_environment(_compute_service_environment())
     logger.info("Service '%s' installed", SERVICE_NAME)
+    logger.info(
+        "If start fails with SCM 1053, check the Windows Application event log "
+        "for entries from source 'PythonService' for Python import errors that "
+        "happened before %s was created.",
+        _service_log_path("service"),
+    )
 
 
 def uninstall_service(*, elevate: bool = True) -> None:
