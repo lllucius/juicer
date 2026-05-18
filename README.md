@@ -630,7 +630,6 @@ when the Service Control Manager starts the process.
 From a Windows PowerShell prompt:
 
 ```powershell
-python -m pip install -r requirements-dev.txt
 pwsh -File scripts/build-service.ps1 -Clean
 ```
 
@@ -639,6 +638,9 @@ The build output is:
 ```text
 dist\juicer_service.exe
 ```
+
+The script installs Juicer's Windows extra plus the PyInstaller build tooling
+into the selected Python environment before running the build.
 
 To build and copy the executable to `%PROGRAMDATA%\Juicer`:
 

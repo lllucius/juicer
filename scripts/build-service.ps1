@@ -37,6 +37,8 @@ try {
         $cleanPaths | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     }
 
+    # Do not use --upgrade here; callers can update their environment explicitly
+    # when they want newer PyInstaller tooling.
     & $Python -m pip install ".[windows]" pyinstaller pyinstaller-hooks-contrib
     if ($LASTEXITCODE -ne 0) {
         throw "Dependency installation failed."

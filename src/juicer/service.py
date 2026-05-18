@@ -150,6 +150,8 @@ def _request_elevated_service_command(command: ServiceCommand) -> None:
         sei.lpVerb = "runas"
         sei.lpFile = sys.executable
         sei.lpParameters = params
+        # Start from the package parent so `python -m juicer.service` can import
+        # the source checkout even when the elevated process has a fresh cwd.
         sei.lpDirectory = _service_package_parent()
         sei.nShow = SW_SHOWNORMAL
 

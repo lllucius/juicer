@@ -67,6 +67,8 @@ def _early_evtlog(message: str, *, error: bool = False) -> None:
         pass
 
 
+# This breadcrumb fires unconditionally at import time so OS loader or frozen
+# executable startup failures can be distinguished from normal argument parsing.
 _early_evtlog(
     f"juicer_service.exe: entry point reached — "
     f"exe={sys.executable!r} args={sys.argv[1:]!r}"
