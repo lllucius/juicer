@@ -32,7 +32,7 @@ try {
             (Join-Path $RepoRoot "build"),
             (Join-Path $RepoRoot "dist")
         )
-        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -Path $cleanPaths
+        $cleanPaths | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     }
 
     & $Python -m pip install --upgrade ".[windows]" pyinstaller pyinstaller-hooks-contrib

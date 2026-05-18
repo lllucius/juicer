@@ -224,7 +224,7 @@ def _service_log_path(name: str) -> Path:
 
         config_path = TomlStore().path
         return config_path.with_name(f"{name}.log")
-    except Exception:
+    except (ImportError, OSError, RuntimeError, ValueError):
         return _default_service_log_dir() / f"{name}.log"
 
 
@@ -407,8 +407,10 @@ if _PYWIN32_AVAILABLE:
                             progress_callback=self._report_start_pending,
                             cancel=_Win32CancelToken(self.stop_event),
                         )
-                    except Exception as exc:
-                        servicemanager.LogErrorMsg(f"{SERVICE_NAME}: Boot failed: {exc}")
+                    except Exception:
+                        servicemanager.LogErrorMsg(
+                            f"{SERVICE_NAME}: Boot failed: {traceback.format_exc()}"
+                        )
                         logger.exception("Boot sequence failed")
                         return
 
@@ -426,9 +428,9 @@ if _PYWIN32_AVAILABLE:
                         )
                         try:
                             _run_shutdown_sequence()
-                        except Exception as exc:
+                        except Exception:
                             servicemanager.LogErrorMsg(
-                                f"{SERVICE_NAME}: Shutdown failed: {exc}"
+                                f"{SERVICE_NAME}: Shutdown failed: {traceback.format_exc()}"
                             )
                             logger.exception("Shutdown sequence failed")
 
@@ -469,8 +471,10 @@ if _PYWIN32_AVAILABLE:
             self._shutdown_done = True
             try:
                 _run_shutdown_sequence()
-            except Exception as exc:
-                servicemanager.LogErrorMsg(f"{SERVICE_NAME}: Shutdown failed: {exc}")
+            except Exception:
+                servicemanager.LogErrorMsg(
+                    f"{SERVICE_NAME}: Shutdown failed: {traceback.format_exc()}"
+                )
             finally:
                 win32event.SetEvent(self.stop_event)
 
@@ -673,7 +677,7 @@ def _run_elevated_command_with_logging(command: str, log_path: str | None) -> in
         if exc.code is not None and not isinstance(exc.code, int):
             emit(str(exc.code))
         return code
-    except BaseException:
+    except Exception:
         emit(f"Elevated service {command} raised an exception:")
         emit(traceback.format_exc().rstrip())
         return 1
