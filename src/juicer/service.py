@@ -566,6 +566,34 @@ else:
 # ──────────────────────────────────────────────────────────────────────
 
 
+def _find_bundled_service_exe() -> str | None:
+    """Return the path to a standalone ``juicer_service.exe`` if one is present.
+
+    A PyInstaller-bundled ``juicer_service.exe`` is a self-contained service
+    executable that bundles Python, pywin32, and all Juicer dependencies.  It
+    acts as its own service host: the SCM starts it directly (no
+    ``pythonservice.exe`` involved), so the entire class of "Python DLL not
+    found / wrong interpreter / missing site-packages" failures is eliminated.
+
+    The search order is:
+
+    1. Same directory as ``sys.executable`` (covers venv ``Scripts/`` installs).
+    2. ``%PROGRAMDATA%\\Juicer\\`` (the same folder used for config and logs).
+
+    Returns the first existing path, or ``None`` when not found.
+    """
+    candidates: list[str] = [
+        os.path.join(os.path.dirname(sys.executable), "juicer_service.exe"),
+    ]
+    base = os.environ.get("PROGRAMDATA")
+    if base:
+        candidates.append(os.path.join(base, "Juicer", "juicer_service.exe"))
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
 def _find_pythonservice_exe() -> str | None:
     """Return the path to pythonservice.exe in its existing site-packages location.
 
@@ -692,34 +720,53 @@ def install_service(*, elevate: bool = True) -> None:
         logger.info("Service '%s' installation delegated to elevated process", SERVICE_NAME)
         return
     kwargs: dict[str, object] = dict(
-        pythonClassString=_service_python_class_string(),
         serviceName=SERVICE_NAME,
         displayName=SERVICE_DISPLAY_NAME,
         description=SERVICE_DESCRIPTION,
         startType=win32service.SERVICE_AUTO_START,
         serviceDeps=SERVICE_DEPS,
     )
-    # Locate pythonservice.exe in its current site-packages/win32/ directory and
-    # pass it directly. This keeps the service running under native Python and
-    # avoids pywin32's built-in relocation logic, which fails on Windows Store
-    # Python installs because the target directory is read-only ("Access is denied.").
-    pythonservice_exe = _find_pythonservice_exe()
-    if pythonservice_exe is not None:
-        kwargs["exeName"] = pythonservice_exe
+    bundled_exe = _find_bundled_service_exe()
+    if bundled_exe is not None:
+        # Use the self-contained PyInstaller exe as the service host.
+        # It bundles Python + pywin32 + all dependencies, so no pythonClassString,
+        # no pythonservice.exe, and no PYTHONPATH registry hack are needed.
+        logger.info(
+            "Found bundled service exe at %s; registering it directly as the service binary",
+            bundled_exe,
+        )
+        kwargs["exeName"] = bundled_exe
+        # pythonClassString is not used when a custom exe is the host.
+    else:
+        # Fall back to the traditional pythonservice.exe + class-string approach.
+        kwargs["pythonClassString"] = _service_python_class_string()
+        pythonservice_exe = _find_pythonservice_exe()
+        if pythonservice_exe is not None:
+            kwargs["exeName"] = pythonservice_exe
     win32serviceutil.InstallService(**kwargs)
-    # Propagate the installer's sys.path (and PYTHONHOME for venv installs)
-    # into the service's environment so the embedded Python interpreter can
-    # import juicer and its third-party dependencies (pydantic, etc.) when
-    # the SCM launches pythonservice.exe.  Without this, a venv-based install
-    # always hits SCM 1053 because module import fails before SvcDoRun runs.
-    _write_service_environment(_compute_service_environment())
+    if bundled_exe is None:
+        # Propagate the installer's sys.path (and PYTHONHOME for venv installs)
+        # into the service's environment so the embedded Python interpreter can
+        # import juicer and its third-party dependencies (pydantic, etc.) when
+        # the SCM launches pythonservice.exe.  Without this, a venv-based install
+        # always hits SCM 1053 because module import fails before SvcDoRun runs.
+        _write_service_environment(_compute_service_environment())
     logger.info("Service '%s' installed", SERVICE_NAME)
-    logger.info(
-        "If start fails with SCM 1053, check the Windows Application event log "
-        "for entries from source 'PythonService' for Python import errors that "
-        "happened before %s was created.",
-        _service_log_path("service"),
-    )
+    if bundled_exe is not None:
+        logger.info(
+            "Service is using the bundled exe (%s); no external Python installation is required.",
+            bundled_exe,
+        )
+    else:
+        logger.info(
+            "If start fails with SCM 1053, check the Windows Application event log "
+            "for entries from source 'PythonService' for Python import errors that "
+            "happened before %s was created.  "
+            "Alternatively, build scripts/juicer_service.spec with PyInstaller and "
+            "drop the resulting juicer_service.exe next to python.exe or in "
+            "%%PROGRAMDATA%%\\Juicer, then reinstall the service.",
+            _service_log_path("service"),
+        )
 
 
 def uninstall_service(*, elevate: bool = True) -> None:
