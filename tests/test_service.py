@@ -241,9 +241,10 @@ def test_install_service_uses_native_python_service_host(
     service_module.install_service()
 
     assert installed_kwargs["exeName"] == str(pythonservice_exe)
-    class_path, class_name = str(installed_kwargs["pythonClassString"]).rsplit(ntpath.sep, 1)
-    assert class_path == service_module._service_package_parent()
-    assert class_name == "juicer.service.JuicerService"
+    assert installed_kwargs["pythonClassString"] == ntpath.join(
+        service_module._service_package_parent(),
+        "juicer.service.JuicerService",
+    )
 
 
 def test_install_service_falls_back_to_pywin32_default_when_pythonservice_not_found(
