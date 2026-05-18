@@ -224,7 +224,7 @@ def _service_log_path(name: str) -> Path:
 
         config_path = TomlStore().path
         return config_path.with_name(f"{name}.log")
-    except (ImportError, OSError, RuntimeError, ValueError) as exc:
+    except (ImportError, OSError, RuntimeError) as exc:
         logger.debug("Falling back to default service log directory: %s", exc)
         return _default_service_log_dir() / f"{name}.log"
 

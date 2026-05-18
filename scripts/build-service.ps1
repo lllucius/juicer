@@ -37,7 +37,7 @@ try {
         $cleanPaths | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    & $Python -m pip install --upgrade ".[windows]" pyinstaller pyinstaller-hooks-contrib
+    & $Python -m pip install ".[windows]" pyinstaller pyinstaller-hooks-contrib
     if ($LASTEXITCODE -ne 0) {
         throw "Dependency installation failed."
     }
