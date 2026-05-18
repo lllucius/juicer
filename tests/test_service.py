@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib
 import logging
-import ntpath
 import os
 import subprocess
 import sys
@@ -223,241 +222,40 @@ def test_cli_can_run_directly_from_source_directory() -> None:
     assert "Juicer" in result.stdout
 
 
-def test_install_service_uses_native_python_service_host(
+def test_install_service_uses_bundled_service_executable(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     service_module = _import_service_with_fake_pywin32()
-    pythonservice_exe = tmp_path / "pythonservice.exe"
-    pythonservice_exe.write_bytes(b"")
+    service_exe = tmp_path / "juicer_service.exe"
+    service_exe.write_bytes(b"")
     installed_kwargs: dict[str, object] = {}
 
     def install_service(**kwargs: object) -> None:
         installed_kwargs.update(kwargs)
 
     monkeypatch.setattr(service_module, "_is_user_admin", lambda: True)
-    monkeypatch.setattr(service_module, "_find_pythonservice_exe", lambda: str(pythonservice_exe))
+    monkeypatch.setattr(service_module, "_find_bundled_service_exe", lambda: str(service_exe))
     monkeypatch.setattr(service_module.win32serviceutil, "InstallService", install_service)
 
     service_module.install_service()
 
-    assert installed_kwargs["exeName"] == str(pythonservice_exe)
-    assert installed_kwargs["pythonClassString"] == ntpath.join(
-        service_module._service_package_parent(),
-        "juicer.service.JuicerService",
-    )
+    assert installed_kwargs["exeName"] == str(service_exe)
+    assert "pythonClassString" not in installed_kwargs
 
 
-def test_install_service_falls_back_to_pywin32_default_when_pythonservice_not_found(
+def test_install_service_requires_bundled_service_executable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service_module = _import_service_with_fake_pywin32()
-    installed_kwargs: dict[str, object] = {}
-
-    def install_service(**kwargs: object) -> None:
-        installed_kwargs.update(kwargs)
 
     monkeypatch.setattr(service_module, "_is_user_admin", lambda: True)
-    monkeypatch.setattr(service_module, "_find_pythonservice_exe", lambda: None)
-    monkeypatch.setattr(service_module.win32serviceutil, "InstallService", install_service)
+    monkeypatch.setattr(service_module, "_find_bundled_service_exe", lambda: None)
 
-    service_module.install_service()
+    with pytest.raises(OSError) as info:
+        service_module.install_service()
 
-    assert "exeName" not in installed_kwargs
-
-
-def test_compute_service_environment_includes_existing_sys_path_entries(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """PYTHONPATH must list installer sys.path entries that exist on disk."""
-    import juicer.service as service_module
-
-    real_a = tmp_path / "site-a"
-    real_b = tmp_path / "site-b"
-    real_a.mkdir()
-    real_b.mkdir()
-    missing = tmp_path / "does-not-exist"
-
-    # Include a duplicate (with different casing) to verify dedup.
-    fake_path = [
-        "",
-        str(real_a),
-        str(missing),
-        str(real_b),
-        str(real_a).upper() if os.name == "nt" else str(real_a),
-    ]
-    monkeypatch.setattr(service_module.sys, "path", fake_path)
-    monkeypatch.setattr(service_module, "_running_in_venv", lambda: False)
-
-    env = service_module._compute_service_environment()
-
-    pythonpath = next((e for e in env if e.startswith("PYTHONPATH=")), None)
-    assert pythonpath is not None
-    entries = pythonpath.removeprefix("PYTHONPATH=").split(os.pathsep)
-    assert str(real_a) in entries
-    assert str(real_b) in entries
-    assert str(missing) not in entries
-    assert "" not in entries
-    # No PYTHONHOME when not in a venv.
-    assert not any(e.startswith("PYTHONHOME=") for e in env)
-
-
-def test_compute_service_environment_exports_pythonhome_in_venv(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """PYTHONHOME must be exported when the installer runs inside a venv."""
-    import juicer.service as service_module
-
-    venv = tmp_path / "venv"
-    venv.mkdir()
-    monkeypatch.setattr(service_module.sys, "prefix", str(venv))
-    monkeypatch.setattr(service_module.sys, "base_prefix", str(tmp_path / "system"))
-    # Ensure at least one valid path entry exists so PYTHONPATH is also emitted.
-    monkeypatch.setattr(service_module.sys, "path", [str(venv)])
-
-    env = service_module._compute_service_environment()
-
-    assert f"PYTHONHOME={venv}" in env
-
-
-def test_compute_service_environment_skips_pythonhome_outside_venv(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    import juicer.service as service_module
-
-    monkeypatch.setattr(service_module.sys, "prefix", str(tmp_path))
-    monkeypatch.setattr(service_module.sys, "base_prefix", str(tmp_path))
-    monkeypatch.setattr(service_module.sys, "path", [str(tmp_path)])
-
-    env = service_module._compute_service_environment()
-
-    assert not any(e.startswith("PYTHONHOME=") for e in env)
-
-
-def test_write_service_environment_writes_reg_multi_sz(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The registry helper must write the Environment value as REG_MULTI_SZ."""
-    import juicer.service as service_module
-
-    captured: dict[str, object] = {}
-
-    class FakeKey:
-        def __enter__(self) -> "FakeKey":
-            return self
-
-        def __exit__(self, *exc: object) -> None:
-            return None
-
-    def fake_open_key(
-        root: object, path: str, reserved: int, access: int
-    ) -> FakeKey:
-        captured["root"] = root
-        captured["path"] = path
-        captured["access"] = access
-        return FakeKey()
-
-    def fake_set_value(
-        key: FakeKey, name: str, reserved: int, vtype: int, value: object
-    ) -> None:
-        captured["name"] = name
-        captured["vtype"] = vtype
-        captured["value"] = value
-
-    fake_winreg = types.SimpleNamespace(
-        OpenKey=fake_open_key,
-        SetValueEx=fake_set_value,
-        HKEY_LOCAL_MACHINE="HKLM",
-        KEY_SET_VALUE=0x0002,
-        REG_MULTI_SZ=7,
-    )
-    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
-
-    service_module._write_service_environment(
-        ["PYTHONPATH=C:\\a;C:\\b", "PYTHONHOME=C:\\venv"]
-    )
-
-    assert captured["root"] == "HKLM"
-    assert captured["path"] == r"SYSTEM\CurrentControlSet\Services\Juicer"
-    assert captured["access"] == 0x0002
-    assert captured["name"] == "Environment"
-    assert captured["vtype"] == 7
-    assert captured["value"] == [
-        "PYTHONPATH=C:\\a;C:\\b",
-        "PYTHONHOME=C:\\venv",
-    ]
-
-
-def test_write_service_environment_is_noop_when_empty(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import juicer.service as service_module
-
-    def boom(*args: object, **kwargs: object) -> object:
-        raise AssertionError("winreg should not be touched when env is empty")
-
-    fake_winreg = types.SimpleNamespace(
-        OpenKey=boom,
-        SetValueEx=boom,
-        HKEY_LOCAL_MACHINE=None,
-        KEY_SET_VALUE=0,
-        REG_MULTI_SZ=0,
-    )
-    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
-
-    service_module._write_service_environment([])
-
-
-def test_write_service_environment_tolerates_oserror(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A failing registry write must not crash install_service."""
-    import juicer.service as service_module
-
-    def raising_open(*args: object, **kwargs: object) -> object:
-        raise OSError("access denied")
-
-    fake_winreg = types.SimpleNamespace(
-        OpenKey=raising_open,
-        SetValueEx=lambda *a, **k: None,
-        HKEY_LOCAL_MACHINE=None,
-        KEY_SET_VALUE=0,
-        REG_MULTI_SZ=0,
-    )
-    monkeypatch.setitem(sys.modules, "winreg", fake_winreg)
-
-    # Should not raise.
-    service_module._write_service_environment(["PYTHONPATH=C:\\x"])
-
-
-def test_install_service_writes_service_environment(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """install_service must propagate the venv sys.path into the registry."""
-    service_module = _import_service_with_fake_pywin32()
-
-    monkeypatch.setattr(service_module, "_is_user_admin", lambda: True)
-    monkeypatch.setattr(service_module, "_find_pythonservice_exe", lambda: None)
-    monkeypatch.setattr(
-        service_module.win32serviceutil, "InstallService", lambda **kw: None
-    )
-
-    computed = ["PYTHONPATH=C:\\venv\\Lib\\site-packages", "PYTHONHOME=C:\\venv"]
-    monkeypatch.setattr(service_module, "_compute_service_environment", lambda: computed)
-
-    written: list[list[str]] = []
-    monkeypatch.setattr(
-        service_module,
-        "_write_service_environment",
-        lambda env: written.append(env),
-    )
-
-    service_module.install_service()
-
-    assert written == [computed]
+    assert "juicer_service.exe was not found" in str(info.value)
 
 
 def test_service_management_requests_elevation_when_not_admin(
@@ -490,8 +288,11 @@ def test_admin_check_defaults_to_not_elevated_when_status_is_unavailable() -> No
 
 def test_service_management_can_skip_elevation_request(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     service_module = _import_service_with_fake_pywin32()
+    service_exe = tmp_path / "juicer_service.exe"
+    service_exe.write_bytes(b"")
     installed_kwargs: dict[str, object] = {}
 
     def install_service(**kwargs: object) -> None:
@@ -501,6 +302,7 @@ def test_service_management_can_skip_elevation_request(
         raise AssertionError("unexpected elevation request")
 
     monkeypatch.setattr(service_module, "_is_user_admin", lambda: False)
+    monkeypatch.setattr(service_module, "_find_bundled_service_exe", lambda: str(service_exe))
     monkeypatch.setattr(service_module, "_request_elevated_service_command", fail_elevation)
     monkeypatch.setattr(service_module.win32serviceutil, "InstallService", install_service)
 

@@ -613,19 +613,67 @@ service startup pending while power-up is still in progress.
 
 The service writes per-sequence log files next to the config file:
 
+- `service.log`
 - `boot.log`
 - `shutdown.log`
 
 That makes post-mortem debugging easier on Windows systems where interactive
 stdout/stderr is not available.
 
-### Installation notes
+### Build and deploy the service executable
 
-Service installation uses pywin32's native `pythonservice.exe` host. The code
-also includes a compatibility path that prefers the existing
-`site-packages/win32/pythonservice.exe` location rather than relying on pywin32
-to relocate it. This is important for Windows Store Python installs, where the
-interpreter directory may be read-only.
+The Windows service runs from a self-contained PyInstaller executable instead
+of `pythonservice.exe`. This avoids service-start failures caused by an
+unactivated virtual environment, a missing Python DLL, or missing site-packages
+when the Service Control Manager starts the process.
+
+From a Windows PowerShell prompt:
+
+```powershell
+python -m pip install -r requirements-dev.txt
+pwsh -File scripts/build-service.ps1 -Clean
+```
+
+The build output is:
+
+```text
+dist\juicer_service.exe
+```
+
+To build and copy the executable to `%PROGRAMDATA%\Juicer`:
+
+```powershell
+pwsh -File scripts/build-service.ps1 -Clean -Deploy
+```
+
+To build, deploy, install, and start the service in one pass:
+
+```powershell
+pwsh -File scripts/build-service.ps1 -Clean -Install -Start
+```
+
+Run the deploy/install/start command from an elevated shell if Windows blocks
+writing to `%PROGRAMDATA%` or service installation. `-Install` and `-Start`
+delegate to the same `juicer service install` / `juicer service start` helpers
+used by the GUI and CLI.
+
+### Manual service installation
+
+If you prefer to copy the executable yourself:
+
+1. Build `dist\juicer_service.exe`.
+2. Copy it to one of the locations Juicer searches:
+   - `%PROGRAMDATA%\Juicer\juicer_service.exe`
+   - next to the Python interpreter running `juicer service install`
+3. Install and start the service:
+
+```powershell
+juicer service install
+juicer service start
+```
+
+`juicer service install` now requires the bundled executable. If it cannot find
+`juicer_service.exe`, it exits with instructions to build and deploy it first.
 
 ---
 

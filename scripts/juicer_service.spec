@@ -16,18 +16,17 @@
 #
 # Deployment
 # ----------
-# Drop juicer_service.exe next to the Python interpreter (e.g. the venv's
-# Scripts/ directory) OR into %PROGRAMDATA%\Juicer\.  Then run:
+# Preferred workflow:
+#
+#   pwsh -File scripts/build-service.ps1 -Clean -Deploy
+#
+# Or copy juicer_service.exe next to the Python interpreter (e.g. the venv's
+# Scripts/ directory) or into %PROGRAMDATA%\Juicer\. Then run:
 #
 #   juicer service install
 #
 # install_service() will detect juicer_service.exe automatically and register
-# it directly as the service binary, bypassing pythonservice.exe entirely.
-#
-# Alternatively, register it yourself from an elevated prompt:
-#
-#   juicer_service.exe install
-#   juicer_service.exe start
+# it directly as the service binary.
 
 import os
 import sys

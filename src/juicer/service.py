@@ -11,10 +11,8 @@ from __future__ import annotations
 
 import ctypes
 import logging
-import ntpath
 import os
 import platform
-import site
 import subprocess
 import sys
 import tempfile
@@ -61,45 +59,6 @@ SERVICE_DESCRIPTION = "Controls Furman F1500-UPS E outlet banks via RS-232 seria
 SERVICE_DEPS = ["Serenum", "Serial"]
 
 
-def _evtlog(message: str, *, error: bool = False) -> None:
-    """Write directly to the Windows Application Event Log using pure ctypes.
-
-    This helper has **no** pywin32 dependency: it calls ``advapi32.dll``
-    directly via :mod:`ctypes`, which is always available in the standard
-    library.  It can therefore fire at any point in the service process
-    lifetime, including module-level code that runs before pywin32 is
-    imported.
-
-    Events are written to the ``Application`` log under source ``Juicer``.
-    *All* errors are silently swallowed — this is diagnostic-only and must
-    never crash the process that calls it.
-    """
-    windll = getattr(ctypes, "windll", None)
-    if windll is None:
-        return
-    try:
-        advapi32 = windll.advapi32
-        # EVENTLOG_ERROR_TYPE = 1  EVENTLOG_INFORMATION_TYPE = 4
-        event_type = ctypes.c_ushort(1 if error else 4)
-        h = advapi32.RegisterEventSourceW(None, SERVICE_NAME)
-        if h:
-            c_strings = (ctypes.c_wchar_p * 1)(message)
-            advapi32.ReportEventW(
-                h,
-                event_type,
-                ctypes.c_ushort(0),  # wCategory
-                ctypes.c_uint(0),  # dwEventID (0 = generic)
-                None,  # lpUserSid
-                ctypes.c_ushort(1),  # wNumStrings
-                ctypes.c_uint(0),  # dwDataSize
-                c_strings,
-                None,  # lpRawData
-            )
-            advapi32.DeregisterEventSource(h)
-    except Exception:  # pragma: no cover
-        pass
-
-
 # ──────────────────────────────────────────────────────────────────────
 # Service Framework (Windows-only at runtime)
 # ──────────────────────────────────────────────────────────────────────
@@ -116,26 +75,6 @@ if _WINDOWS:
         _PYWIN32_AVAILABLE = False
 else:
     _PYWIN32_AVAILABLE = False
-
-# ── Module-level startup breadcrumb ───────────────────────────────────
-# When pythonservice.exe loads this module as a service class, emit a
-# checkpoint to the Windows Application Event Log *before* any class
-# methods run.  This is the earliest possible diagnostic point: if this
-# message appears in Event Viewer but SvcDoRun never fires, the failure
-# is in class instantiation; if this message does NOT appear, the
-# failure is even earlier (Python interpreter start, wrong executable,
-# or a crash before this line).
-_IS_PYTHONSERVICE = _WINDOWS and "pythonservice" in Path(sys.executable).name.lower()
-
-if _IS_PYTHONSERVICE:
-    _evtlog(
-        f"{SERVICE_NAME}: service.py module loaded — "
-        f"exe={sys.executable!r} "
-        f"prefix={sys.prefix!r} "
-        f"pywin32={_PYWIN32_AVAILABLE} "
-        f"path={sys.path[:4]!r}"
-    )
-
 
 def _ensure_pywin32() -> None:
     """Raise a descriptive error when pywin32-backed service features are unavailable."""
@@ -321,17 +260,6 @@ def _service_package_parent() -> str:
     return str(Path(__file__).resolve().parents[1])
 
 
-def _service_python_class_string() -> str:
-    """Return a pywin32 class string that also works from source checkouts.
-
-    ``pythonservice.exe`` supports a ``path\\module.Class`` class string and
-    prepends that path to ``sys.path`` before importing the service class.  This
-    keeps services installed from an unpacked source tree importable when the
-    package has not been installed into site-packages.
-    """
-    return ntpath.join(_service_package_parent(), f"{__name__}.JuicerService")
-
-
 @contextmanager
 def _service_file_logging(name: str) -> Iterator[Path]:
     """Temporarily route service Python logging to a sequence-specific file."""
@@ -432,7 +360,6 @@ if _PYWIN32_AVAILABLE:
 
         def __init__(self, args: list[str]) -> None:
             """Create the service instance and allocate its stop event handle."""
-            _evtlog(f"{SERVICE_NAME}: JuicerService.__init__ reached")
             win32serviceutil.ServiceFramework.__init__(self, args)
             self.stop_event = win32event.CreateEvent(None, True, False, None)
             self._shutdown_done = False
@@ -460,7 +387,6 @@ if _PYWIN32_AVAILABLE:
             handler, early failures left ``C:\\ProgramData\\Juicer`` empty and
             users had no way to diagnose service start timeouts.
             """
-            _evtlog(f"{SERVICE_NAME}: SvcDoRun reached")
             installed = _install_service_log_handler("service")
             service_log_handler = installed[0] if installed is not None else None
             service_log_path = installed[1] if installed is not None else None
@@ -594,179 +520,38 @@ def _find_bundled_service_exe() -> str | None:
     return None
 
 
-def _find_pythonservice_exe() -> str | None:
-    """Return the path to pythonservice.exe in its existing site-packages location.
-
-    pywin32 normally tries to move pythonservice.exe next to the Python interpreter
-    so that the Service Control Manager can find it.  On Windows Store Python
-    installations that target directory is read-only, so the move fails with
-    "Access is denied."  Passing the already-installed path directly as ``exeName``
-    to :func:`win32serviceutil.InstallService` skips the relocation step entirely.
-    """
-    search_dirs: list[str] = [os.path.join(sys.prefix, "Lib", "site-packages")]
-    if hasattr(site, "getsitepackages"):
-        search_dirs.extend(site.getsitepackages())
-    user_site = site.getusersitepackages()
-    if user_site:
-        search_dirs.append(user_site)
-
-    for site_dir in search_dirs:
-        candidate = os.path.join(site_dir, "win32", "pythonservice.exe")
-        if os.path.isfile(candidate):
-            return candidate
-    return None
-
-
-def _running_in_venv() -> bool:
-    """Return True when the current interpreter is running inside a virtual env."""
-    base_prefix = getattr(sys, "base_prefix", sys.prefix)
-    return os.path.normcase(sys.prefix) != os.path.normcase(base_prefix)
-
-
-def _compute_service_environment() -> list[str]:
-    """Build the ``Environment`` REG_MULTI_SZ entries for the installed service.
-
-    When Juicer is installed from a virtual environment, ``pythonservice.exe``
-    is launched by the SCM **without** venv activation: the venv's
-    ``site-packages`` directory is not on ``sys.path``, so importing
-    :mod:`juicer.service` (which transitively requires ``pydantic`` and other
-    third-party dependencies) fails before :meth:`SvcDoRun` ever runs.  The
-    symptom is SCM error 1053 with no entry in ``service.log``, because the
-    service process exits during module import.
-
-    Writing the current installer's ``sys.path`` as ``PYTHONPATH`` into the
-    service's environment registry value makes the service process inherit
-    the same import paths as the installer, which is exactly what is needed
-    for venv-based installs.  ``PYTHONHOME`` is also exported when running
-    from a venv so that Python's start-up resolves the venv's standard
-    library and ``site-packages`` correctly.
-
-    Only existing directory entries are included.  Empty / non-existent
-    entries (e.g. the current directory, zipapp paths, or missing site
-    directories) are filtered out so they do not pollute the service's
-    import path.
-    """
-    seen: set[str] = set()
-    paths: list[str] = []
-    for entry in sys.path:
-        if not entry:
-            continue
-        try:
-            if not os.path.isdir(entry):
-                continue
-        except OSError:
-            continue
-        normalized = os.path.normcase(os.path.normpath(entry))
-        if normalized in seen:
-            continue
-        seen.add(normalized)
-        paths.append(entry)
-
-    env: list[str] = []
-    if paths:
-        env.append("PYTHONPATH=" + os.pathsep.join(paths))
-    if _running_in_venv():
-        env.append(f"PYTHONHOME={sys.prefix}")
-    return env
-
-
-def _write_service_environment(env_entries: list[str]) -> None:
-    """Write ``Environment`` REG_MULTI_SZ for the Juicer service.
-
-    The SCM merges this value into the service process's environment block at
-    start time, so any variable set here is visible to ``pythonservice.exe``
-    and the embedded Python interpreter it hosts.  This function is a no-op
-    when ``env_entries`` is empty or when the registry is unavailable (for
-    example on non-Windows systems used in tests).
-    """
-    if not env_entries:
-        return
-    try:
-        import winreg
-    except ImportError:
-        logger.debug("winreg unavailable; skipping service environment write")
-        return
-
-    key_path = rf"SYSTEM\CurrentControlSet\Services\{SERVICE_NAME}"
-    try:
-        with winreg.OpenKey(
-            winreg.HKEY_LOCAL_MACHINE,
-            key_path,
-            0,
-            winreg.KEY_SET_VALUE,
-        ) as key:
-            winreg.SetValueEx(key, "Environment", 0, winreg.REG_MULTI_SZ, env_entries)
-    except OSError as exc:
-        # Don't fail the install just because we couldn't write the env block —
-        # the service may still work when installed against a system Python.
-        logger.warning(
-            "Unable to write service environment to registry "
-            "(HKLM\\%s\\Environment): %s",
-            key_path,
-            exc,
-        )
-        return
-    logger.info(
-        "Wrote %d service environment variable(s) to HKLM\\%s\\Environment",
-        len(env_entries),
-        key_path,
-    )
-
-
 def install_service(*, elevate: bool = True) -> None:
-    """Install the Juicer Windows service."""
+    """Install the Juicer Windows service from the bundled service executable."""
     _ensure_pywin32()
     if not _request_elevation_if_needed("install", elevate):
         logger.info("Service '%s' installation delegated to elevated process", SERVICE_NAME)
         return
+    bundled_exe = _find_bundled_service_exe()
+    if bundled_exe is None:
+        raise OSError(
+            "juicer_service.exe was not found. Build it with "
+            "scripts\\build-service.ps1, copy it next to python.exe or to "
+            "%PROGRAMDATA%\\Juicer\\juicer_service.exe, then run "
+            "'juicer service install' again."
+        )
     kwargs: dict[str, object] = dict(
         serviceName=SERVICE_NAME,
         displayName=SERVICE_DISPLAY_NAME,
         description=SERVICE_DESCRIPTION,
         startType=win32service.SERVICE_AUTO_START,
         serviceDeps=SERVICE_DEPS,
+        exeName=bundled_exe,
     )
-    bundled_exe = _find_bundled_service_exe()
-    if bundled_exe is not None:
-        # Use the self-contained PyInstaller exe as the service host.
-        # It bundles Python + pywin32 + all dependencies, so no pythonClassString,
-        # no pythonservice.exe, and no PYTHONPATH registry hack are needed.
-        logger.info(
-            "Found bundled service exe at %s; registering it directly as the service binary",
-            bundled_exe,
-        )
-        kwargs["exeName"] = bundled_exe
-        # pythonClassString is not used when a custom exe is the host.
-    else:
-        # Fall back to the traditional pythonservice.exe + class-string approach.
-        kwargs["pythonClassString"] = _service_python_class_string()
-        pythonservice_exe = _find_pythonservice_exe()
-        if pythonservice_exe is not None:
-            kwargs["exeName"] = pythonservice_exe
+    logger.info(
+        "Registering bundled service executable at %s as the service binary",
+        bundled_exe,
+    )
     win32serviceutil.InstallService(**kwargs)
-    if bundled_exe is None:
-        # Propagate the installer's sys.path (and PYTHONHOME for venv installs)
-        # into the service's environment so the embedded Python interpreter can
-        # import juicer and its third-party dependencies (pydantic, etc.) when
-        # the SCM launches pythonservice.exe.  Without this, a venv-based install
-        # always hits SCM 1053 because module import fails before SvcDoRun runs.
-        _write_service_environment(_compute_service_environment())
     logger.info("Service '%s' installed", SERVICE_NAME)
-    if bundled_exe is not None:
-        logger.info(
-            "Service is using the bundled exe (%s); no external Python installation is required.",
-            bundled_exe,
-        )
-    else:
-        logger.info(
-            "If start fails with SCM 1053, check the Windows Application event log "
-            "for entries from source 'PythonService' for Python import errors that "
-            "happened before %s was created.  "
-            "Alternatively, build scripts/juicer_service.spec with PyInstaller and "
-            "drop the resulting juicer_service.exe next to python.exe or in "
-            "%%PROGRAMDATA%%\\Juicer, then reinstall the service.",
-            _service_log_path("service"),
-        )
+    logger.info(
+        "Service is using %s; no external Python runtime is required at service start.",
+        bundled_exe,
+    )
 
 
 def uninstall_service(*, elevate: bool = True) -> None:
