@@ -11,16 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from juicer.protocol import (
     AVRMode,
     AVRModeResponse,
-    AVRState,
-    AVRStateResponse,
-    BackupTimeResponse,
     BankNumber,
     BankState,
     BankStatusResponse,
-    BatteryChargeState,
     BatteryLevelResponse,
-    BatteryStateResponse,
-    BatteryThresholdGlobalResponse,
     BatteryThresholdResponse,
     Brightness,
     BrightnessResponse,
@@ -41,10 +35,9 @@ from juicer.protocol import (
     LinefeedResponse,
     LoadResponse,
     LowBatteryResponse,
-    NormalVolt,
-    NormalVoltResponse,
     PowerStatus,
     PowerStatusResponse,
+    PromptReceived,
     ProtocolError,
     RawResponse,
     ScrollMode,
@@ -67,13 +60,11 @@ from juicer.protocol import (
     cmd_set_buzzer,
     cmd_set_feedback,
     cmd_set_linefeed,
-    cmd_set_normalvolt,
     cmd_set_scrollmode,
     cmd_set_sleepmode,
     cmd_switch,
     parse_line,
     query_batterystat,
-    query_battstate,
     query_current,
     query_help,
     query_id,
@@ -82,7 +73,6 @@ from juicer.protocol import (
     query_outletstat,
     query_power,
     query_powerstat,
-    query_time,
     query_voltage,
 )
 
@@ -135,6 +125,97 @@ def test_read_line_discards_optional_lf_after_cr() -> None:
 
     assert first == "$PWR = NORMAL"
     assert second == "$BATTERY = 85"
+
+
+def test_read_line_raises_prompt_received_when_gt_is_first_byte() -> None:
+    """Real firmware prints '>' (0x3E) as a ready prompt after command output."""
+    transport = SerialTransport(port="COM1")
+    # Single-line response followed by the ready prompt, as seen on real device
+    transport._serial = _StubSerial(b"$BUZZER=ON\r>")
+
+    line = transport.read_line()
+    assert line == "$BUZZER=ON"
+
+    with pytest.raises(PromptReceived):
+        transport.read_line()
+
+
+def test_read_line_raises_prompt_received_for_prompt_only_command() -> None:
+    """Commands like !SET_LINEFEED print only '>' with no preceding data line."""
+    transport = SerialTransport(port="COM1")
+    transport._serial = _StubSerial(b">")
+
+    with pytest.raises(PromptReceived):
+        transport.read_line()
+
+
+def test_read_line_handles_multi_line_output_followed_by_prompt() -> None:
+    """Multi-line output: all data lines returned, then PromptReceived on '>'."""
+    transport = SerialTransport(port="COM1")
+    transport._serial = _StubSerial(b"$BANK1=ON\r$BANK2=ON\r$BANK3=ON\r$BANK4=ON\r>")
+
+    assert transport.read_line() == "$BANK1=ON"
+    assert transport.read_line() == "$BANK2=ON"
+    assert transport.read_line() == "$BANK3=ON"
+    assert transport.read_line() == "$BANK4=ON"
+    with pytest.raises(PromptReceived):
+        transport.read_line()
+
+
+def test_read_line_discards_stray_bytes_before_dollar() -> None:
+    """Garbage bytes before a '$' line start are silently discarded."""
+    transport = SerialTransport(port="COM1")
+    transport._serial = _StubSerial(b"\x00\x00$PWR=NORMAL\r")
+
+    assert transport.read_line() == "$PWR=NORMAL"
+
+
+def test_client_drains_trailing_prompt_between_commands() -> None:
+    """Regression: leftover '>' must not corrupt the next command's read.
+
+    Mirrors the GUI failure where each query reported "Unavailable
+    (Device '>' prompt received)" because the trailing prompt from the
+    previous response remained buffered.
+    """
+    t = FakeTransport()
+    t.open()
+    # ?ID response (three IDLineResponse lines) + prompt
+    t.enqueue_responses(["$FURMAN", "$F1500-UPS", "$AJ1365"])
+    t.enqueue_prompt()
+    # ?POWERSTAT response + prompt
+    t.enqueue_response("$PWR=NORMAL")
+    t.enqueue_prompt()
+    client = JuicerClient(t)
+
+    identity = client.query_id()
+    assert identity.model == "F1500-UPS"
+
+    # Without the post-command prompt drain this call would raise
+    # ProtocolError because read_line would return PromptReceived from
+    # the leftover ?ID prompt instead of the actual $PWR line.
+    power = client.query_power_status()
+    assert power.status == PowerStatus.NORMAL
+
+
+def test_fake_transport_enqueue_prompt_raises_prompt_received() -> None:
+    t = FakeTransport()
+    t.open()
+    t.enqueue_response("$BUZZER=ON")
+    t.enqueue_prompt()
+
+    assert t.read_line() == "$BUZZER=ON"
+    with pytest.raises(PromptReceived):
+        t.read_line()
+
+
+def test_fake_transport_enqueue_prompt_only() -> None:
+    """enqueue_prompt() with no data lines simulates a prompt-only command."""
+    t = FakeTransport()
+    t.open()
+    t.enqueue_prompt()
+
+    with pytest.raises(PromptReceived):
+        t.read_line()
 
 
 def test_serial_open_sets_write_timeout() -> None:
@@ -261,12 +342,6 @@ def test_cmd_reset_all() -> None:
     assert cmd_reset_all() == "!RESET_ALL\r"
 
 
-def test_cmd_set_normalvolt_all_values() -> None:
-    assert cmd_set_normalvolt("220") == "!SET_NORMALVOLT 220\r"
-    assert cmd_set_normalvolt("230") == "!SET_NORMALVOLT 230\r"
-    assert cmd_set_normalvolt(NormalVolt.V240) == "!SET_NORMALVOLT 240\r"
-
-
 # ──────────────────────────────────────────────────────────────────────
 # Query builders
 # ──────────────────────────────────────────────────────────────────────
@@ -302,14 +377,6 @@ def test_query_loadstat() -> None:
 
 def test_query_batterystat() -> None:
     assert query_batterystat() == "?BATTERYSTAT\r"
-
-
-def test_query_battstate() -> None:
-    assert query_battstate() == "?BATTSTATE\r"
-
-
-def test_query_time() -> None:
-    assert query_time() == "?TIME\r"
 
 
 def test_query_list_config() -> None:
@@ -436,6 +503,13 @@ def test_parse_bthresh() -> None:
     assert r.level == 20
 
 
+def test_parse_bthresh_real_device_compact_zero_padded() -> None:
+    r = parse_line("$BTHRESH3=060")
+    assert isinstance(r, BatteryThresholdResponse)
+    assert r.bank == BankNumber.BANK3
+    assert r.level == 60
+
+
 def test_parse_bthresh_bank4() -> None:
     r = parse_line("$BTHRESH 4 = 80")
     assert isinstance(r, BatteryThresholdResponse)
@@ -443,39 +517,9 @@ def test_parse_bthresh_bank4() -> None:
     assert r.level == 80
 
 
-def test_parse_global_bthresh() -> None:
-    r = parse_line("$BTHRESH = 80")
-    assert isinstance(r, BatteryThresholdGlobalResponse)
-    assert r.level == 80
-
-
 def test_parse_low_battery() -> None:
     r = parse_line("$LOWBAT")
     assert isinstance(r, LowBatteryResponse)
-
-
-def test_parse_battstate_full() -> None:
-    r = parse_line("$BATTSTATE = FULL")
-    assert isinstance(r, BatteryStateResponse)
-    assert r.state == BatteryChargeState.FULL
-
-
-def test_parse_battstate_charge() -> None:
-    r = parse_line("$BATTSTATE = CHARGE")
-    assert isinstance(r, BatteryStateResponse)
-    assert r.state == BatteryChargeState.CHARGE
-
-
-def test_parse_battstate_discharge() -> None:
-    r = parse_line("$BATTSTATE = DISCHARGE")
-    assert isinstance(r, BatteryStateResponse)
-    assert r.state == BatteryChargeState.DISCHARGE
-
-
-def test_parse_backup_time() -> None:
-    r = parse_line("$TIME = 60")
-    assert isinstance(r, BackupTimeResponse)
-    assert r.minutes == 60
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -514,6 +558,12 @@ def test_parse_linefeed() -> None:
     assert r.mode == LinefeedMode.OFF
 
 
+def test_parse_linefeed_on_real_device_omits_dollar() -> None:
+    r = parse_line("LINEFEED=ON")
+    assert isinstance(r, LinefeedResponse)
+    assert r.mode == LinefeedMode.ON
+
+
 def test_parse_brightness_all_levels() -> None:
     for level in Brightness:
         r = parse_line(f"$BRIGHTNESS = {level.value}")
@@ -535,13 +585,6 @@ def test_parse_sleep_mode_all_values() -> None:
         assert r.mode == mode
 
 
-def test_parse_normalvolt_all_values() -> None:
-    for v in NormalVolt:
-        r = parse_line(f"$NORMALVOLT = {v.value}")
-        assert isinstance(r, NormalVoltResponse)
-        assert r.voltage == v
-
-
 def test_parse_factory_reset() -> None:
     r = parse_line("$FACTORY SETTINGS RESTORED")
     assert isinstance(r, FactoryResetResponse)
@@ -554,20 +597,8 @@ def test_parse_invalid_parameter() -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# parse_line — AVR state and button
+# parse_line — button state
 # ──────────────────────────────────────────────────────────────────────
-
-
-def test_parse_avrstate_boost() -> None:
-    r = parse_line("$AVRSTATE = BOOST")
-    assert isinstance(r, AVRStateResponse)
-    assert r.state == AVRState.BOOST
-
-
-def test_parse_avrstate_buck() -> None:
-    r = parse_line("$AVRSTATE = BUCK")
-    assert isinstance(r, AVRStateResponse)
-    assert r.state == AVRState.BUCK
 
 
 def test_parse_button_on() -> None:
@@ -647,6 +678,21 @@ def test_fake_transport_raises_timeout_when_empty() -> None:
         t.read_line()
 
 
+def test_client_initialize_sends_feedback_and_linefeed() -> None:
+    """initialize() establishes a known SET_FEEDBACK/SET_LINEFEED environment."""
+    t = FakeTransport()
+    t.open()
+    # Real firmware emits prompt-only responses for both setup commands;
+    # initialize() must tolerate that without raising.
+    t.enqueue_prompt()
+    t.enqueue_prompt()
+    client = JuicerClient(t)
+
+    client.initialize()
+
+    assert t.written == ["!SET_FEEDBACK ON\r", "!SET_LINEFEED OFF\r"]
+
+
 def test_fake_transport_raises_when_not_open() -> None:
     t = FakeTransport()
     with pytest.raises(TransportError):
@@ -689,6 +735,21 @@ def test_client_all_on() -> None:
     assert all(r.state == BankState.ON for r in result)
 
 
+def test_client_all_on_real_firmware_includes_button_and_prompt() -> None:
+    """Real firmware !ALL_ON: $BANK1-4=ON then $BUTTON=ON then '>'."""
+    t = FakeTransport()
+    t.open()
+    t.enqueue_responses(["$BANK1=ON", "$BANK2=ON", "$BANK3=ON", "$BANK4=ON", "$BUTTON=ON"])
+    t.enqueue_prompt()
+    client = JuicerClient(t)
+    result = client.all_on()
+    bank_results = [r for r in result if isinstance(r, BankStatusResponse)]
+    button_results = [r for r in result if isinstance(r, ButtonResponse)]
+    assert len(bank_results) == 4
+    assert all(r.state == BankState.ON for r in bank_results)
+    assert len(button_results) == 1
+
+
 def test_client_all_off() -> None:
     t = _open_fake(
         "$BANK 1 = OFF", "$BANK 2 = OFF", "$BANK 3 = OFF", "$BANK 4 = OFF"
@@ -697,6 +758,20 @@ def test_client_all_off() -> None:
     result = client.all_off()
     assert t.last_command == "!ALL_OFF\r"
     assert all(r.state == BankState.OFF for r in result)
+
+
+def test_client_all_off_real_firmware_includes_button_and_prompt() -> None:
+    """Real firmware !ALL_OFF: $BANK1-4=OFF then $BUTTON=ON then '>'."""
+    t = FakeTransport()
+    t.open()
+    t.enqueue_responses(["$BANK1=OFF", "$BANK2=OFF", "$BANK3=OFF", "$BANK4=OFF", "$BUTTON=ON"])
+    t.enqueue_prompt()
+    client = JuicerClient(t)
+    result = client.all_off()
+    bank_results = [r for r in result if isinstance(r, BankStatusResponse)]
+    button_results = [r for r in result if isinstance(r, ButtonResponse)]
+    assert all(r.state == BankState.OFF for r in bank_results)
+    assert len(button_results) == 1
 
 
 def test_client_switch_on() -> None:
@@ -717,9 +792,13 @@ def test_client_switch_reads_only_expected_bank_response() -> None:
 
     result = client.switch(2, "ON")
 
-    assert t.read_count == 1
+    # One read for the bank-status line, plus the drain loop that consumes
+    # the queued follow-up and one more read that raises JuicerTimeoutError
+    # to end the drain.
+    assert t.read_count == 3
     assert isinstance(result[0], BankStatusResponse)
-    assert t.read_line() == "$BANK 3 = ON"
+    with pytest.raises(JuicerTimeoutError):
+        t.read_line()
 
 
 def test_client_switch_rejects_wrong_bank_response() -> None:
@@ -806,6 +885,24 @@ def test_client_set_feedback_on() -> None:
     assert isinstance(result[0], FeedbackResponse)
 
 
+def test_client_set_feedback_off_accepts_real_device_no_response() -> None:
+    t = _open_fake()
+    client = JuicerClient(t)
+    result = client.set_feedback("OFF")
+    assert t.last_command == "!SET_FEEDBACK OFF\r"
+    assert result == []
+
+
+def test_client_set_feedback_off_accepts_prompt_only() -> None:
+    """Real firmware: !SET_FEEDBACK OFF → '>' (ready prompt only)."""
+    t = FakeTransport()
+    t.open()
+    t.enqueue_prompt()
+    client = JuicerClient(t)
+    result = client.set_feedback("OFF")
+    assert result == []
+
+
 def test_client_set_linefeed_off() -> None:
     t = _open_fake("$LINEFEED = OFF")
     client = JuicerClient(t)
@@ -813,6 +910,17 @@ def test_client_set_linefeed_off() -> None:
     assert t.last_command == "!SET_LINEFEED OFF\r"
     assert isinstance(result[0], LinefeedResponse)
     assert result[0].mode == LinefeedMode.OFF
+
+
+def test_client_set_linefeed_prompt_only() -> None:
+    """Real firmware: !SET_LINEFEED ON/OFF → only '>' prompt (no data line)."""
+    t = FakeTransport()
+    t.open()
+    t.enqueue_prompt()
+    client = JuicerClient(t)
+    result = client.set_linefeed("ON")
+    assert t.last_command == "!SET_LINEFEED ON\r"
+    assert result == []
 
 
 def test_client_set_bright_075() -> None:
@@ -832,6 +940,16 @@ def test_client_set_bright_all_levels() -> None:
         assert t.last_command == f"!SET_BRIGHT {level.value}\r"
 
 
+def test_client_set_bright_prompt_only() -> None:
+    """Real firmware: !SET_BRIGHT → only '>' prompt (no data line)."""
+    t = FakeTransport()
+    t.open()
+    t.enqueue_prompt()
+    client = JuicerClient(t)
+    result = client.set_bright("100")
+    assert result == []
+
+
 def test_client_set_scrollmode_10sec() -> None:
     t = _open_fake("$SCROLL_MODE = 10SEC")
     client = JuicerClient(t)
@@ -841,6 +959,16 @@ def test_client_set_scrollmode_10sec() -> None:
     assert result[0].mode == ScrollMode.SEC10
 
 
+def test_client_set_scrollmode_prompt_only() -> None:
+    """Real firmware: !SET_SCROLLMODE → only '>' prompt (no data line)."""
+    t = FakeTransport()
+    t.open()
+    t.enqueue_prompt()
+    client = JuicerClient(t)
+    result = client.set_scrollmode("OFF")
+    assert result == []
+
+
 def test_client_set_sleepmode_30sec() -> None:
     t = _open_fake("$SLEEP_MODE = 30SEC")
     client = JuicerClient(t)
@@ -848,6 +976,17 @@ def test_client_set_sleepmode_30sec() -> None:
     assert t.last_command == "!SET_SLEEPMODE 30SEC\r"
     assert isinstance(result[0], SleepModeResponse)
     assert result[0].mode == SleepMode.SEC30
+
+
+def test_client_set_sleepmode_prompt_only() -> None:
+    """Real firmware: !SET_SLEEPMODE → only '>' prompt (no data line)."""
+    t = FakeTransport()
+    t.open()
+    t.enqueue_prompt()
+    client = JuicerClient(t)
+    result = client.set_sleepmode("OFF")
+    assert result == []
+
 
 
 def test_client_reset_all() -> None:
@@ -864,23 +1003,6 @@ def test_client_reset_all_wrong_response_raises() -> None:
     client = JuicerClient(t)
     with pytest.raises(ProtocolError):
         client.reset_all()
-
-
-def test_client_set_normalvolt_220() -> None:
-    t = _open_fake("$NORMALVOLT = 220")
-    client = JuicerClient(t)
-    result = client.set_normalvolt("220")
-    assert t.last_command == "!SET_NORMALVOLT 220\r"
-    assert isinstance(result[0], NormalVoltResponse)
-    assert result[0].voltage == NormalVolt.V220
-
-
-def test_client_set_normalvolt_all_values() -> None:
-    for v in NormalVolt:
-        t = _open_fake(f"$NORMALVOLT = {v.value}")
-        client = JuicerClient(t)
-        client.set_normalvolt(v)
-        assert t.last_command == f"!SET_NORMALVOLT {v.value}\r"
 
 
 def test_client_invalid_command_returns_invalid_parameter() -> None:
@@ -1026,6 +1148,15 @@ def test_client_query_voltage() -> None:
     assert result.volts == pytest.approx(230.0)
 
 
+def test_client_query_voltage_accepts_real_device_volts_in_response() -> None:
+    t = _open_fake("$VOLTS_IN=120")
+    client = JuicerClient(t)
+    result = client.query_voltage()
+    assert t.last_command == "?VOLTAGE\r"
+    assert isinstance(result, VoltageResponse)
+    assert result.volts == pytest.approx(120.0)
+
+
 def test_client_query_voltage_wrong_response_raises() -> None:
     t = _open_fake("$INVALID_PARAMETER")
     client = JuicerClient(t)
@@ -1065,94 +1196,46 @@ def test_client_query_battery_status_wrong_response_raises() -> None:
         client.query_battery_status()
 
 
-def test_client_query_battery_state_full() -> None:
-    t = _open_fake("$BATTSTATE = FULL")
-    client = JuicerClient(t)
-    result = client.query_battery_state()
-    assert t.last_command == "?BATTSTATE\r"
-    assert isinstance(result, BatteryStateResponse)
-    assert result.state == BatteryChargeState.FULL
-
-
-def test_client_query_battery_state_charge() -> None:
-    t = _open_fake("$BATTSTATE = CHARGE")
-    client = JuicerClient(t)
-    result = client.query_battery_state()
-    assert result.state == BatteryChargeState.CHARGE
-
-
-def test_client_query_battery_state_discharge() -> None:
-    t = _open_fake("$BATTSTATE = DISCHARGE")
-    client = JuicerClient(t)
-    result = client.query_battery_state()
-    assert result.state == BatteryChargeState.DISCHARGE
-
-
-def test_client_query_battery_state_wrong_response_raises() -> None:
-    t = _open_fake("$INVALID_PARAMETER")
-    client = JuicerClient(t)
-    with pytest.raises(ProtocolError):
-        client.query_battery_state()
-
-
-def test_client_query_backup_time() -> None:
-    t = _open_fake("$TIME = 60")
-    client = JuicerClient(t)
-    result = client.query_backup_time()
-    assert t.last_command == "?TIME\r"
-    assert isinstance(result, BackupTimeResponse)
-    assert result.minutes == 60
-
-
-def test_client_query_backup_time_wrong_response_raises() -> None:
-    t = _open_fake("$INVALID_PARAMETER")
-    client = JuicerClient(t)
-    with pytest.raises(ProtocolError):
-        client.query_backup_time()
-
-
-def test_client_query_list_config_defaults() -> None:
+def test_client_query_list_config_real_device_format() -> None:
     t = _open_fake(
-        "$BUZZER = ON",
-        "$AVR = OFF",
-        "$FEEDBACK = ON",
-        "$LINEFEED = OFF",
-        "$BRIGHTNESS = 100",
-        "$SCROLL_MODE = 5SEC",
-        "$SLEEP_MODE = OFF",
-        "$NORMALVOLT = 230",
-        "$BTHRESH 3 = 20",
-        "$BTHRESH 4 = 20",
+        "$BTHRESH3=060",
+        "$BTHRESH4=040",
+        "$BUZZER=OFF",
+        "$AVR=STANDARD",
+        "$FEEDBACK=ON",
+        "$LINEFEED=OFF",
+        "$BRIGHTNESS=100",
+        "$SCROLL_MODE=OFF",
+        "$SLEEP_MODE=OFF",
     )
     client = JuicerClient(t)
     result = client.query_list_config()
     assert t.last_command == "?LIST_CONFIG\r"
-    assert result.buzzer == BuzzerMode.ON
-    assert result.avr == AVRMode.OFF
+    assert result.bthresh3 == 60
+    assert result.bthresh4 == 40
+    assert result.buzzer == BuzzerMode.OFF
+    assert result.avr == AVRMode.STANDARD
     assert result.feedback == FeedbackMode.ON
     assert result.linefeed == LinefeedMode.OFF
     assert result.brightness == Brightness.B100
-    assert result.scroll_mode == ScrollMode.SEC5
+    assert result.scroll_mode == ScrollMode.OFF
     assert result.sleep_mode == SleepMode.OFF
-    assert result.normalvolt == NormalVolt.V230
-    assert result.bthresh == 20  # last BTHRESH seen (bank 4)
 
 
 def test_client_query_help_returns_command_list() -> None:
     help_lines = [
         "!ALL_ON",
         "!ALL_OFF",
-        "!SWITCH <bank> <ON|OFF>",
-        "!SET_BATTHRESH <bank> <level>",
-        "!SET_BUZZER <ON|OFF>",
-        "!SET_AVR <OFF|STANDARD|SENSITIVE>",
-        "!SET_FEEDBACK <ON|OFF>",
-        "!SET_LINEFEED <ON|OFF>",
-        "!SET_BRIGHT <100|075|050|025>",
-        "!SET_SCROLLMODE <5SEC|10SEC|OFF>",
-        "!SET_SLEEPMODE <30SEC|60SEC|OFF>",
+        "!SWITCH",
+        "!SET_BATTHRESH",
+        "!SET_BUZZER",
+        "!SET_AVR",
+        "!SET_FEEDBACK",
+        "!SET_LINEFEED",
         "!RESET_ALL",
-        "!SET_NORMALVOLT <220|230|240>",
+        "!SET_BRIGHT",
+        "!SET_SCROLLMODE",
+        "!SET_SLEEPMODE",
         "?ID",
         "?OUTLETSTAT",
         "?POWERSTAT",
@@ -1161,8 +1244,6 @@ def test_client_query_help_returns_command_list() -> None:
         "?VOLTAGE",
         "?LOADSTAT",
         "?BATTERYSTAT",
-        "?BATTSTATE",
-        "?TIME",
         "?LIST_CONFIG",
         "?HELP",
     ]
@@ -1172,8 +1253,8 @@ def test_client_query_help_returns_command_list() -> None:
     assert t.last_command == "?HELP\r"
     assert "!ALL_ON" in result
     assert "?ID" in result
-    assert "?BATTSTATE" in result
-    assert "?TIME" in result
+    assert "?BATTSTATE" not in result
+    assert "?TIME" not in result
     assert len(result) == len(help_lines)
 
 
@@ -1233,19 +1314,16 @@ def test_stateful_configure_then_reset() -> None:
 
 
 def test_stateful_battery_queries() -> None:
-    """Query battery level, state, and backup time in sequence."""
-    t = _open_fake(
-        "$BATTERY = 85",
-        "$BATTSTATE = FULL",
-        "$TIME = 60",
-    )
+    """Query battery level in sequence, draining the trailing prompt."""
+    t = FakeTransport()
+    t.open()
+    # Each query reads its data line and then drains the trailing ``>``
+    # prompt that real firmware emits after every response.
+    t.enqueue_response("$BATTERY = 85")
+    t.enqueue_prompt()
     client = JuicerClient(t)
 
     lvl = client.query_battery_status()
-    state = client.query_battery_state()
-    btime = client.query_backup_time()
 
     assert lvl.level == 85
-    assert state.state == BatteryChargeState.FULL
-    assert btime.minutes == 60
-    assert t.written == ["?BATTERYSTAT\r", "?BATTSTATE\r", "?TIME\r"]
+    assert t.written == ["?BATTERYSTAT\r"]

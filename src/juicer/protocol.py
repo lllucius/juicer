@@ -1,7 +1,11 @@
 """Juicer serial protocol — commands, responses, transport, and client.
 
-Implements the complete Furman F1500-UPS E RS-232 protocol from manual.txt:
-13 commands, 10 queries, all response families, plus transport abstraction.
+Implements the Furman F1500-UPS E RS-232 protocol as observed empirically
+on real hardware (see ``scripts/capture_furman_protocol.py``): 12 action
+commands, 10 queries, plus transport abstraction.  Commands that the
+manual documents but the real firmware rejects with ``$INVALID_PARAMETER``
+(``!SET_NORMALVOLT``, ``?BATTSTATE``, ``?TIME``) are intentionally not
+supported here.
 
 All command construction and response parsing works without a real serial port.
 """
@@ -10,11 +14,12 @@ from __future__ import annotations
 
 import abc
 import enum
+import functools
 import logging
 import re
 import time
 from collections import deque
-from typing import Any, Sequence, TypeVar
+from typing import Any, Callable, Sequence, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -43,6 +48,17 @@ class TransportError(JuicerError):
 
 class ValidationError(JuicerError):
     """Command parameter validation failed."""
+
+
+class PromptReceived(JuicerError):
+    """Device sent the ``>`` prompt character, signalling readiness.
+
+    Raised by :meth:`SerialTransport.read_line` (and optionally by
+    :meth:`FakeTransport.read_line`) when the ``>`` byte (0x3E) is the
+    first character of an incoming line.  Client helpers treat this the
+    same as :class:`JuicerTimeoutError` for variable-length reads because
+    the shell-style prompt means the device is ready for another command.
+    """
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -131,29 +147,6 @@ class SleepMode(str, enum.Enum):
     OFF = "OFF"
 
 
-class NormalVolt(str, enum.Enum):
-    """Nominal mains voltage configuration reported by the UPS."""
-
-    V220 = "220"
-    V230 = "230"
-    V240 = "240"
-
-
-class AVRState(str, enum.Enum):
-    """Active AVR correction direction when regulation is engaged."""
-
-    BOOST = "BOOST"
-    BUCK = "BUCK"
-
-
-class BatteryChargeState(str, enum.Enum):
-    """Current battery charging direction or fully charged state."""
-
-    CHARGE = "CHARGE"
-    DISCHARGE = "DISCHARGE"
-    FULL = "FULL"
-
-
 class ButtonState(str, enum.Enum):
     """Front-panel power button enabled/disabled state."""
 
@@ -206,15 +199,9 @@ class BatteryLevelResponse(BaseModel):
 
 
 class BatteryThresholdResponse(BaseModel):
-    """``$BTHRESH <bank> = <level>``."""
+    """``$BTHRESH <bank> = <level>`` or ``$BTHRESH<bank>=<level>``."""
 
     bank: BankNumber
-    level: int
-
-
-class BatteryThresholdGlobalResponse(BaseModel):
-    """``$BTHRESH = <level>`` from ``?LIST_CONFIG``."""
-
     level: int
 
 
@@ -260,12 +247,6 @@ class SleepModeResponse(BaseModel):
     mode: SleepMode
 
 
-class NormalVoltResponse(BaseModel):
-    """``$NORMALVOLT = <xxx>``."""
-
-    voltage: NormalVolt
-
-
 class FactoryResetResponse(BaseModel):
     """``$FACTORY SETTINGS RESTORED``."""
 
@@ -282,24 +263,6 @@ class LowBatteryResponse(BaseModel):
     """``$LOWBAT`` (async)."""
 
     pass
-
-
-class AVRStateResponse(BaseModel):
-    """``$AVRSTATE = <BOOST|BUCK>``."""
-
-    state: AVRState
-
-
-class BackupTimeResponse(BaseModel):
-    """``$TIME = <xxx>`` (minutes of backup remaining)."""
-
-    minutes: int
-
-
-class BatteryStateResponse(BaseModel):
-    """``$BATTSTATE = <CHARGE|DISCHARGE|FULL>``."""
-
-    state: BatteryChargeState
 
 
 class VoltsInResponse(BaseModel):
@@ -368,9 +331,15 @@ class PowerMetricsResponse(BaseModel):
 
 
 class ListConfigResponse(BaseModel):
-    """Aggregate of ``?LIST_CONFIG`` response lines."""
+    """Aggregate of ``?LIST_CONFIG`` response lines.
 
-    bthresh: int | None = None
+    Field set matches the real F1500-UPS firmware capture: per-bank
+    battery thresholds (``$BTHRESH3``/``$BTHRESH4``) plus buzzer, AVR
+    mode, feedback, linefeed, brightness, scroll mode, and sleep mode.
+    """
+
+    bthresh3: int | None = None
+    bthresh4: int | None = None
     buzzer: BuzzerMode | None = None
     avr: AVRMode | None = None
     feedback: FeedbackMode | None = None
@@ -378,7 +347,6 @@ class ListConfigResponse(BaseModel):
     brightness: Brightness | None = None
     scroll_mode: ScrollMode | None = None
     sleep_mode: SleepMode | None = None
-    normalvolt: NormalVolt | None = None
 
 
 class RawResponse(BaseModel):
@@ -394,7 +362,6 @@ ParsedResponse = (
     | PowerStatusResponse
     | BatteryLevelResponse
     | BatteryThresholdResponse
-    | BatteryThresholdGlobalResponse
     | BuzzerResponse
     | AVRModeResponse
     | FeedbackResponse
@@ -402,13 +369,9 @@ ParsedResponse = (
     | BrightnessResponse
     | ScrollModeResponse
     | SleepModeResponse
-    | NormalVoltResponse
     | FactoryResetResponse
     | InvalidParameterResponse
     | LowBatteryResponse
-    | AVRStateResponse
-    | BackupTimeResponse
-    | BatteryStateResponse
     | VoltsInResponse
     | VoltsOutResponse
     | WattsResponse
@@ -503,12 +466,6 @@ def cmd_reset_all() -> str:
     return f"!RESET_ALL{CR}"
 
 
-def cmd_set_normalvolt(voltage: str | NormalVolt) -> str:
-    """Build ``!SET_NORMALVOLT <xxx>\\r``."""
-    v = NormalVolt(voltage if isinstance(voltage, str) else voltage.value)
-    return f"!SET_NORMALVOLT {v.value}{CR}"
-
-
 # ── Query builders ────────────────────────────────────────────────────
 
 
@@ -552,16 +509,6 @@ def query_batterystat() -> str:
     return f"?BATTERYSTAT{CR}"
 
 
-def query_battstate() -> str:
-    """Build ``?BATTSTATE\\r``."""
-    return f"?BATTSTATE{CR}"
-
-
-def query_time() -> str:
-    """Build ``?TIME\\r``."""
-    return f"?TIME{CR}"
-
-
 def query_list_config() -> str:
     """Build ``?LIST_CONFIG\\r``."""
     return f"?LIST_CONFIG{CR}"
@@ -576,30 +523,25 @@ def query_help() -> str:
 # Line Parser
 # ──────────────────────────────────────────────────────────────────────
 
-# Regex patterns for response lines
+# Regex patterns for response lines (matched against real-firmware capture)
 _RE_BANK = re.compile(r"^\$BANK\s*(\d)\s*=\s*(ON|OFF)$")
 _RE_BUTTON = re.compile(r"^\$BUTTON\s*=\s*(ON|OFF)$")
 _RE_PWR = re.compile(r"^\$PWR\s*=\s*(.+)$")
 _RE_BATTERY = re.compile(r"^\$BATTERY\s*=\s*(\d+)$")
-_RE_BTHRESH = re.compile(r"^\$BTHRESH\s+(\d)\s*=\s*(\d+)$")
-_RE_BTHRESH_GLOBAL = re.compile(r"^\$BTHRESH\s*=\s*(\d+)$")
+_RE_BTHRESH = re.compile(r"^\$BTHRESH\s*(\d)\s*=\s*(\d+)$")
 _RE_BUZZER = re.compile(r"^\$BUZZER\s*=\s*(ON|OFF)$")
 _RE_AVR_MODE = re.compile(r"^\$AVR\s*=\s*(OFF|STANDARD|SENSITIVE)$")
 _RE_FEEDBACK = re.compile(r"^\$FEEDBACK\s*=\s*(ON|OFF)$")
-_RE_LINEFEED = re.compile(r"^\$LINEFEED\s*=\s*(ON|OFF)$")
+_RE_LINEFEED = re.compile(r"^\$?LINEFEED\s*=\s*(ON|OFF)$")
 _RE_BRIGHTNESS = re.compile(r"^\$BRIGHTNESS\s*=\s*(\d+)$")
 _RE_SCROLL = re.compile(r"^\$SCROLL_MODE\s*=\s*(.+)$")
 _RE_SLEEP = re.compile(r"^\$SLEEP_MODE\s*=\s*(.+)$")
-_RE_NORMALVOLT = re.compile(r"^\$NORMALVOLT\s*=\s*(\d+)$")
 _RE_VOLTS_IN = re.compile(r"^\$VOLTS_IN\s*=\s*([\d.]+)$")
 _RE_VOLTS_OUT = re.compile(r"^\$VOLTS_OUT\s*=\s*([\d.]+)$")
 _RE_WATTS = re.compile(r"^\$WATTS\s*=\s*([\d.]+)$")
 _RE_CURRENT = re.compile(r"^\$CURRENT\s*=\s*([\d.]+)$")
 _RE_VOLTAGE = re.compile(r"^\$VOLTAGE\s*=\s*([\d.]+)$")
 _RE_LOAD = re.compile(r"^\$LOAD\s*=\s*([\d.]+)$")
-_RE_AVRSTATE = re.compile(r"^\$AVRSTATE\s*=\s*(BOOST|BUCK)$")
-_RE_TIME = re.compile(r"^\$TIME\s*=\s*(\d+)$")
-_RE_BATTSTATE = re.compile(r"^\$BATTSTATE\s*=\s*(CHARGE|DISCHARGE|FULL)$")
 
 
 def parse_line(line: str) -> ParsedResponse:
@@ -610,9 +552,6 @@ def parse_line(line: str) -> ParsedResponse:
     """
     line = line.strip("\r\n ")
 
-    if not line.startswith("$"):
-        return RawResponse(raw=line)
-
     # Exact-match tokens
     if line == "$INVALID_PARAMETER":
         return InvalidParameterResponse()
@@ -622,6 +561,12 @@ def parse_line(line: str) -> ParsedResponse:
         return FactoryResetResponse()
 
     # Regex-based parsing
+    if m := _RE_LINEFEED.match(line):
+        return LinefeedResponse(mode=LinefeedMode(m.group(1)))
+
+    if not line.startswith("$"):
+        return RawResponse(raw=line)
+
     if m := _RE_BANK.match(line):
         return BankStatusResponse(bank=BankNumber(int(m.group(1))), state=BankState(m.group(2)))
     if m := _RE_BUTTON.match(line):
@@ -632,24 +577,18 @@ def parse_line(line: str) -> ParsedResponse:
         return BatteryLevelResponse(level=int(m.group(1)))
     if m := _RE_BTHRESH.match(line):
         return BatteryThresholdResponse(bank=BankNumber(int(m.group(1))), level=int(m.group(2)))
-    if m := _RE_BTHRESH_GLOBAL.match(line):
-        return BatteryThresholdGlobalResponse(level=int(m.group(1)))
     if m := _RE_BUZZER.match(line):
         return BuzzerResponse(mode=BuzzerMode(m.group(1)))
     if m := _RE_AVR_MODE.match(line):
         return AVRModeResponse(mode=AVRMode(m.group(1)))
     if m := _RE_FEEDBACK.match(line):
         return FeedbackResponse(mode=FeedbackMode(m.group(1)))
-    if m := _RE_LINEFEED.match(line):
-        return LinefeedResponse(mode=LinefeedMode(m.group(1)))
     if m := _RE_BRIGHTNESS.match(line):
         return BrightnessResponse(level=Brightness(m.group(1)))
     if m := _RE_SCROLL.match(line):
         return ScrollModeResponse(mode=ScrollMode(m.group(1).strip()))
     if m := _RE_SLEEP.match(line):
         return SleepModeResponse(mode=SleepMode(m.group(1).strip()))
-    if m := _RE_NORMALVOLT.match(line):
-        return NormalVoltResponse(voltage=NormalVolt(m.group(1)))
     if m := _RE_VOLTS_IN.match(line):
         return VoltsInResponse(volts=float(m.group(1)))
     if m := _RE_VOLTS_OUT.match(line):
@@ -662,12 +601,6 @@ def parse_line(line: str) -> ParsedResponse:
         return VoltageResponse(volts=float(m.group(1)))
     if m := _RE_LOAD.match(line):
         return LoadResponse(percent=float(m.group(1)))
-    if m := _RE_AVRSTATE.match(line):
-        return AVRStateResponse(state=AVRState(m.group(1)))
-    if m := _RE_TIME.match(line):
-        return BackupTimeResponse(minutes=int(m.group(1)))
-    if m := _RE_BATTSTATE.match(line):
-        return BatteryStateResponse(state=BatteryChargeState(m.group(1)))
 
     # ID response lines (manufacturer, model, firmware) — plain $<text>
     if line.startswith("$"):
@@ -708,6 +641,15 @@ class Transport(abc.ABC):
         """Read one CR-terminated line. Returns the line *without* the CR.
 
         Raises ``JuicerTimeoutError`` if no complete line within *timeout* seconds.
+        """
+
+    def drain(self) -> None:
+        """Discard any bytes already buffered for reading.
+
+        Default implementation is a no-op; transports that talk to a real
+        device override this to clear stale input before sending the next
+        command.  This makes the client resilient when the previous response
+        was not fully consumed (e.g. an exception interrupted the read loop).
         """
 
     @property
@@ -760,6 +702,10 @@ class SerialTransport(Transport):
                     write_timeout=2.0,
                 )
                 logger.info("Opened serial port %s (attempt %d)", self.port, attempt + 1)
+                # Discard any stale bytes that may have been buffered before
+                # we opened the port; the device may have been printing prompts
+                # or unsolicited status while we were not listening.
+                self.drain()
                 return
             except serial.SerialException as exc:
                 last_err = exc
@@ -783,8 +729,50 @@ class SerialTransport(Transport):
             raise TransportError("Serial port not open")
         self._serial.write(data.encode("ascii"))
 
+    def drain(self) -> None:
+        """Discard any bytes already available on the port.
+
+        Used to recover from a previous command whose trailing ``>`` prompt
+        was not consumed (e.g. when an exception interrupted reading).  Reads
+        non-blockingly until no more bytes arrive.
+        """
+        self._pending_byte = b""
+        if not self._serial or not self._serial.is_open:
+            return
+        try:
+            in_waiting = int(getattr(self._serial, "in_waiting", 0) or 0)
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            return
+        if in_waiting <= 0:
+            return
+        try:
+            discarded = self._serial.read(in_waiting)
+        except Exception:  # pragma: no cover - defensive
+            return
+        try:
+            count = len(discarded) if discarded else 0
+        except TypeError:  # pragma: no cover - defensive
+            return
+        if count:
+            logger.debug("Drained %d stale bytes from serial input", count)
+
     def read_line(self, timeout: float = 2.0) -> str:
-        """Read bytes until CR (0x0D), stripping optional trailing LF."""
+        """Read bytes until CR (0x0D), stripping optional trailing LF.
+
+        The real Furman F1500-UPS firmware behaves like a simple shell: it
+        prints command output, then prints a ``>`` prompt byte (0x3E, no CR)
+        to show that it is ready for the next command.  The prompt is not
+        part of the response data.  When ``>`` is the first byte of a new read
+        (either from a previous peek stored in ``_pending_byte`` or arriving
+        fresh from the serial port), :class:`PromptReceived` is raised.
+        Callers that iterate over variable-length responses (e.g.
+        :meth:`JuicerClient._recv_variable`) catch this exception to stop
+        reading, just as they catch :class:`JuicerTimeoutError`.
+
+        Stray bytes that are neither ``$`` (response start) nor ``>`` (ready
+        prompt) at the beginning of a new line are discarded with a debug
+        log entry, since every valid Furman line begins with ``$``.
+        """
         if not self._serial or not self._serial.is_open:
             raise TransportError("Serial port not open")
         buf = bytearray()
@@ -797,12 +785,20 @@ class SerialTransport(Transport):
                 b = self._serial.read(1)
             if not b:
                 continue
+            if b[0] == 0x3E and not buf:  # '>' prompt — ready for next command
+                raise PromptReceived("Device '>' prompt received")
             if b[0] == 0x0D:  # CR — end of line
                 # Peek for optional LF
                 peek = self._serial.read(1)
                 if peek and peek[0] != 0x0A:
                     self._pending_byte = peek
                 return buf.decode("ascii", errors="replace")
+            # All valid response lines start with '$'.  Silently drop any
+            # garbage bytes that appear before a line begins, so a single
+            # noise byte cannot corrupt the next response.
+            if not buf and b[0] != 0x24:
+                logger.debug("Discarded stray byte 0x%02X before '$'", b[0])
+                continue
             buf.append(b[0])
         raise JuicerTimeoutError(f"No CR-terminated line within {timeout}s")
 
@@ -810,6 +806,16 @@ class SerialTransport(Transport):
     def is_open(self) -> bool:
         """Report whether the underlying pyserial handle is currently open."""
         return self._serial is not None and self._serial.is_open
+
+
+class _PromptSentinel:
+    """Internal marker type used by :class:`FakeTransport` to simulate the ``>`` prompt.
+
+    A singleton instance (:attr:`FakeTransport._PROMPT`) is queued by
+    :meth:`FakeTransport.enqueue_prompt` so that :meth:`FakeTransport.read_line`
+    can raise :class:`PromptReceived` exactly as :class:`SerialTransport` does
+    when it receives the 0x3E byte from the real device.
+    """
 
 
 class FakeTransport(Transport):
@@ -826,9 +832,12 @@ class FakeTransport(Transport):
 
     def __init__(self) -> None:
         """Initialize an empty, closed in-memory transport."""
-        self._responses: deque[str] = deque()
+        self._responses: deque[str | _PromptSentinel] = deque()
         self._written: list[str] = []
         self._open = False
+
+    # Singleton sentinel queued by enqueue_prompt() to simulate the '>' prompt.
+    _PROMPT: _PromptSentinel = _PromptSentinel()
 
     def open(self) -> None:
         """Mark the fake transport as open for subsequent reads and writes."""
@@ -845,12 +854,21 @@ class FakeTransport(Transport):
         self._written.append(data)
 
     def read_line(self, timeout: float = 2.0) -> str:
-        """Return the next queued response line or raise when none are available."""
+        """Return the next queued response line, or raise when none are available.
+
+        If the next queued item is the internal prompt sentinel (enqueued via
+        :meth:`enqueue_prompt`), raises :class:`PromptReceived` to mirror the
+        behaviour of :meth:`SerialTransport.read_line` when the real device
+        prints its ``>`` ready prompt.
+        """
         if not self._open:
             raise TransportError("FakeTransport not open")
         if not self._responses:
             raise JuicerTimeoutError("No more queued responses in FakeTransport")
-        return self._responses.popleft()
+        item = self._responses.popleft()
+        if item is FakeTransport._PROMPT:
+            raise PromptReceived("Simulated '>' prompt from FakeTransport")
+        return str(item)
 
     @property
     def is_open(self) -> bool:
@@ -866,6 +884,15 @@ class FakeTransport(Transport):
     def enqueue_responses(self, lines: Sequence[str]) -> None:
         """Queue multiple response lines."""
         self._responses.extend(lines)
+
+    def enqueue_prompt(self) -> None:
+        """Queue a simulated ``>`` ready prompt.
+
+        Use this to reproduce real-firmware command cycles that print no data
+        lines before the ``>`` prompt (e.g. ``!SET_LINEFEED ON``).  The next
+        call to :meth:`read_line` will raise :class:`PromptReceived`.
+        """
+        self._responses.append(FakeTransport._PROMPT)
 
     @property
     def written(self) -> list[str]:
@@ -888,6 +915,33 @@ class FakeTransport(Transport):
 # ──────────────────────────────────────────────────────────────────────
 
 
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _with_prompt_drain(func: _F) -> _F:
+    """Decorator: consume the trailing ``>`` prompt after a command method.
+
+    Every Furman command response ends with a ``>`` byte that the device
+    prints to signal it is ready for the next command.  Wrapping each
+    public client method ensures that byte is always consumed — on the
+    success path *and* on the error path — so the next command starts
+    with a clean input buffer instead of inheriting a stale prompt that
+    would otherwise raise :class:`PromptReceived` on its first read.
+    """
+
+    @functools.wraps(func)
+    def wrapper(self: "JuicerClient", *args: Any, **kwargs: Any) -> Any:
+        try:
+            return func(self, *args, **kwargs)
+        finally:
+            try:
+                self._drain_prompt()
+            except Exception as drain_exc:  # pragma: no cover - defensive
+                logger.debug("Prompt drain after %s raised %r", func.__name__, drain_exc)
+
+    return wrapper  # type: ignore[return-value]
+
+
 class JuicerClient:
     """High-level client combining transport + command builders + response parsing.
 
@@ -901,7 +955,18 @@ class JuicerClient:
     # ── Helpers ───────────────────────────────────────────────────────
 
     def _send(self, cmd: str) -> None:
-        """Send a pre-built command string."""
+        """Send a pre-built command string.
+
+        Before writing, any bytes still buffered on the transport are
+        discarded.  In normal operation each command's response ends with
+        ``>`` which is consumed by :meth:`_drain_prompt`; the proactive
+        drain here protects against the case where a previous command
+        aborted before its prompt was consumed.
+        """
+        try:
+            self.transport.drain()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Transport drain before send raised %r", exc)
         logger.debug("TX: %r", cmd)
         self.transport.write(cmd)
 
@@ -915,6 +980,33 @@ class JuicerClient:
         """Receive and parse one line."""
         return parse_line(self._recv(timeout))
 
+    def _drain_prompt(self, timeout: float = 0.5) -> list[ParsedResponse]:
+        """Consume bytes up to and including the trailing ``>`` ready prompt.
+
+        Every real-firmware command response ends with the ``>`` byte that
+        the device prints to indicate it is ready for the next command.  This
+        helper is called at the end of every command so the next command
+        starts with a clean buffer (otherwise the leftover ``>`` would be
+        read by the next command's first ``read_line`` and raise
+        :class:`PromptReceived`, surfacing as a spurious "Unavailable" error).
+
+        Any unexpected response lines that arrive before the prompt are
+        returned to the caller so they can be incorporated into the result
+        or surfaced as protocol errors.  If neither a prompt nor any data
+        arrives within *timeout* seconds, returns silently — the FakeTransport
+        and older emulator builds do not always emit a prompt.
+        """
+        extras: list[ParsedResponse] = []
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                extras.append(self._recv_parsed(max(0.01, deadline - time.monotonic())))
+            except PromptReceived:
+                return extras
+            except JuicerTimeoutError:
+                return extras
+        return extras
+
     def _recv_n(self, n: int, timeout: float = 2.0) -> list[ParsedResponse]:
         """Receive and parse *n* response lines."""
         return [self._recv_parsed(timeout) for _ in range(n)]
@@ -922,12 +1014,12 @@ class JuicerClient:
     def _recv_until_timeout(
         self, timeout: float = 0.5, max_lines: int = 20
     ) -> list[ParsedResponse]:
-        """Read variable-length responses, stopping after a quiet timeout."""
+        """Read variable-length responses, stopping after quiet timeout or prompt."""
         results: list[ParsedResponse] = []
         for _ in range(max_lines):
             try:
                 results.append(self._recv_parsed(timeout))
-            except JuicerTimeoutError:
+            except (JuicerTimeoutError, PromptReceived):
                 break
         return results
 
@@ -949,7 +1041,7 @@ class JuicerClient:
         for _ in range(max_lines - min_lines):
             try:
                 resp = self._recv_parsed(quiet_timeout)
-            except JuicerTimeoutError:
+            except (JuicerTimeoutError, PromptReceived):
                 break
             if isinstance(resp, InvalidParameterResponse):
                 raise ProtocolError(f"{context}: device returned $INVALID_PARAMETER")
@@ -1015,16 +1107,19 @@ class JuicerClient:
 
     # ── Commands ──────────────────────────────────────────────────────
 
+    @_with_prompt_drain
     def all_on(self) -> list[ParsedResponse]:
         """Send ``!ALL_ON`` and collect documented status responses."""
         self._send(cmd_all_on())
         return self._recv_variable(min_lines=1, max_lines=6, context="!ALL_ON")
 
+    @_with_prompt_drain
     def all_off(self) -> list[ParsedResponse]:
         """Send ``!ALL_OFF`` and collect documented status responses."""
         self._send(cmd_all_off())
         return self._recv_variable(min_lines=4, max_lines=6, context="!ALL_OFF")
 
+    @_with_prompt_drain
     def switch(self, bank: int | BankNumber, state: str | BankState) -> list[ParsedResponse]:
         """Send ``!SWITCH`` and collect protocol status lines.
 
@@ -1039,6 +1134,7 @@ class JuicerClient:
             responses.extend(self._recv_until_timeout(timeout=0.25, max_lines=3))
         return responses
 
+    @_with_prompt_drain
     def set_batthresh(self, bank: int | BankNumber, level: int) -> list[ParsedResponse]:
         """Send ``!SET_BATTHRESH`` and read response."""
         self._send(cmd_set_batthresh(bank, level))
@@ -1053,41 +1149,97 @@ class JuicerClient:
             )
         return [resp]
 
+    @_with_prompt_drain
     def set_buzzer(self, mode: str | BuzzerMode) -> list[ParsedResponse]:
         """Send ``!SET_BUZZER``."""
         self._send(cmd_set_buzzer(mode))
         return [self._expect_one(BuzzerResponse, context="!SET_BUZZER")]
 
+    @_with_prompt_drain
     def set_avr(self, mode: str | AVRMode) -> list[ParsedResponse]:
         """Send ``!SET_AVR``."""
         self._send(cmd_set_avr(mode))
         return [self._expect_one(AVRModeResponse, context="!SET_AVR")]
 
+    @_with_prompt_drain
     def set_feedback(self, mode: str | FeedbackMode) -> list[ParsedResponse]:
-        """Send ``!SET_FEEDBACK``."""
-        self._send(cmd_set_feedback(mode))
-        return [self._expect_one(FeedbackResponse, context="!SET_FEEDBACK")]
+        """Send ``!SET_FEEDBACK``.
 
+        Real firmware behaviour (observed on F1500-UPS):
+
+        * ``!SET_FEEDBACK ON``  → ``$FEEDBACK=ON\\r>``
+        * ``!SET_FEEDBACK OFF`` → ``>`` (ready prompt only, no data line)
+        """
+        if isinstance(mode, FeedbackMode):
+            feedback_mode = mode
+        else:
+            feedback_mode = FeedbackMode(mode.upper())
+        self._send(cmd_set_feedback(feedback_mode))
+        try:
+            return [self._expect_one(FeedbackResponse, timeout=0.5, context="!SET_FEEDBACK")]
+        except PromptReceived:
+            # A bare '>' ready prompt with no data line is valid only for OFF.
+            if feedback_mode == FeedbackMode.OFF:
+                return []
+            raise
+        except JuicerTimeoutError:
+            if feedback_mode == FeedbackMode.OFF:
+                return []
+            raise
+
+    @_with_prompt_drain
     def set_linefeed(self, mode: str | LinefeedMode) -> list[ParsedResponse]:
-        """Send ``!SET_LINEFEED``."""
+        """Send ``!SET_LINEFEED``.
+
+        Real firmware prints only the ``>`` prompt for this command (no data
+        line), so an empty list is a valid successful result.
+        """
         self._send(cmd_set_linefeed(mode))
-        return [self._expect_one(LinefeedResponse, context="!SET_LINEFEED")]
+        try:
+            return [self._expect_one(LinefeedResponse, context="!SET_LINEFEED")]
+        except (JuicerTimeoutError, PromptReceived):
+            return []
 
+    @_with_prompt_drain
     def set_bright(self, level: str | Brightness) -> list[ParsedResponse]:
-        """Send ``!SET_BRIGHT``."""
+        """Send ``!SET_BRIGHT``.
+
+        Real firmware prints only the ``>`` prompt for this command (no data
+        line), so an empty list is a valid successful result.
+        """
         self._send(cmd_set_bright(level))
-        return [self._expect_one(BrightnessResponse, context="!SET_BRIGHT")]
+        try:
+            return [self._expect_one(BrightnessResponse, context="!SET_BRIGHT")]
+        except (JuicerTimeoutError, PromptReceived):
+            return []
 
+    @_with_prompt_drain
     def set_scrollmode(self, mode: str | ScrollMode) -> list[ParsedResponse]:
-        """Send ``!SET_SCROLLMODE``."""
+        """Send ``!SET_SCROLLMODE``.
+
+        Real firmware prints only the ``>`` prompt for this command (no data
+        line), so an empty list is a valid successful result.
+        """
         self._send(cmd_set_scrollmode(mode))
-        return [self._expect_one(ScrollModeResponse, context="!SET_SCROLLMODE")]
+        try:
+            return [self._expect_one(ScrollModeResponse, context="!SET_SCROLLMODE")]
+        except (JuicerTimeoutError, PromptReceived):
+            return []
 
+    @_with_prompt_drain
     def set_sleepmode(self, mode: str | SleepMode) -> list[ParsedResponse]:
-        """Send ``!SET_SLEEPMODE``."""
-        self._send(cmd_set_sleepmode(mode))
-        return [self._expect_one(SleepModeResponse, context="!SET_SLEEPMODE")]
+        """Send ``!SET_SLEEPMODE``.
 
+        Real firmware prints only the ``>`` prompt for this command (no data
+        line), so an empty list is a valid successful result.
+        """
+        self._send(cmd_set_sleepmode(mode))
+        try:
+            return [self._expect_one(SleepModeResponse, context="!SET_SLEEPMODE")]
+        except (JuicerTimeoutError, PromptReceived):
+            return []
+
+    @_with_prompt_drain
     def reset_all(self) -> FactoryResetResponse:
         """Send ``!RESET_ALL`` and expect factory-reset confirmation."""
         self._send(cmd_reset_all())
@@ -1096,13 +1248,9 @@ class JuicerClient:
             return resp
         raise ProtocolError(f"Expected FactoryResetResponse, got {resp!r}")
 
-    def set_normalvolt(self, voltage: str | NormalVolt) -> list[ParsedResponse]:
-        """Send ``!SET_NORMALVOLT``."""
-        self._send(cmd_set_normalvolt(voltage))
-        return [self._expect_one(NormalVoltResponse, context="!SET_NORMALVOLT")]
-
     # ── Queries ───────────────────────────────────────────────────────
 
+    @_with_prompt_drain
     def query_id(self) -> IDResponse:
         """Send ``?ID`` and parse the three-line response."""
         self._send(query_id())
@@ -1116,6 +1264,7 @@ class JuicerClient:
             firmware=id_lines[2],
         )
 
+    @_with_prompt_drain
     def query_outlet_status(self) -> OutletStatusResponse:
         """Send ``?OUTLETSTAT`` and parse four bank-status lines."""
         self._send(query_outletstat())
@@ -1132,6 +1281,7 @@ class JuicerClient:
             raise ProtocolError(f"?OUTLETSTAT response missing banks: {missing_banks}")
         return OutletStatusResponse(banks=banks)
 
+    @_with_prompt_drain
     def query_power_status(self) -> PowerStatusResponse:
         """Send ``?POWERSTAT`` and parse the single-line response."""
         self._send(query_powerstat())
@@ -1140,6 +1290,7 @@ class JuicerClient:
             return resp
         raise ProtocolError(f"Expected PowerStatusResponse, got {resp!r}")
 
+    @_with_prompt_drain
     def query_power(self) -> PowerMetricsResponse:
         """Send ``?POWER`` and parse the four metrics lines."""
         self._send(query_power())
@@ -1168,6 +1319,7 @@ class JuicerClient:
             current=data["current"],
         )
 
+    @_with_prompt_drain
     def query_current(self) -> CurrentResponse:
         """Send ``?CURRENT``."""
         self._send(query_current())
@@ -1176,14 +1328,18 @@ class JuicerClient:
             return resp
         raise ProtocolError(f"Expected CurrentResponse, got {resp!r}")
 
+    @_with_prompt_drain
     def query_voltage(self) -> VoltageResponse:
         """Send ``?VOLTAGE``."""
         self._send(query_voltage())
         resp = self._recv_parsed()
         if isinstance(resp, VoltageResponse):
             return resp
+        if isinstance(resp, VoltsInResponse):
+            return VoltageResponse(volts=resp.volts)
         raise ProtocolError(f"Expected VoltageResponse, got {resp!r}")
 
+    @_with_prompt_drain
     def query_loadstat(self) -> LoadResponse:
         """Send ``?LOADSTAT``."""
         self._send(query_loadstat())
@@ -1192,6 +1348,7 @@ class JuicerClient:
             return resp
         raise ProtocolError(f"Expected LoadResponse, got {resp!r}")
 
+    @_with_prompt_drain
     def query_battery_status(self) -> BatteryLevelResponse:
         """Send ``?BATTERYSTAT``."""
         self._send(query_batterystat())
@@ -1200,30 +1357,23 @@ class JuicerClient:
             return resp
         raise ProtocolError(f"Expected BatteryLevelResponse, got {resp!r}")
 
-    def query_battery_state(self) -> BatteryStateResponse:
-        """Send ``?BATTSTATE``."""
-        self._send(query_battstate())
-        resp = self._recv_parsed()
-        if isinstance(resp, BatteryStateResponse):
-            return resp
-        raise ProtocolError(f"Expected BatteryStateResponse, got {resp!r}")
-
-    def query_backup_time(self) -> BackupTimeResponse:
-        """Send ``?TIME``."""
-        self._send(query_time())
-        resp = self._recv_parsed()
-        if isinstance(resp, BackupTimeResponse):
-            return resp
-        raise ProtocolError(f"Expected BackupTimeResponse, got {resp!r}")
-
+    @_with_prompt_drain
     def query_list_config(self) -> ListConfigResponse:
-        """Send ``?LIST_CONFIG`` and aggregate response lines."""
+        """Send ``?LIST_CONFIG`` and aggregate response lines.
+
+        Real F1500-UPS firmware emits nine lines (BTHRESH3, BTHRESH4,
+        BUZZER, AVR, FEEDBACK, LINEFEED, BRIGHTNESS, SCROLL_MODE,
+        SLEEP_MODE) followed by the ``>`` prompt.
+        """
         self._send(query_list_config())
         cfg = ListConfigResponse()
-        responses = self._recv_variable(min_lines=9, max_lines=10, context="?LIST_CONFIG")
+        responses = self._recv_variable(min_lines=9, max_lines=9, context="?LIST_CONFIG")
         for resp in responses:
-            if isinstance(resp, BatteryThresholdResponse | BatteryThresholdGlobalResponse):
-                cfg.bthresh = resp.level
+            if isinstance(resp, BatteryThresholdResponse):
+                if resp.bank == BankNumber.BANK3:
+                    cfg.bthresh3 = resp.level
+                elif resp.bank == BankNumber.BANK4:
+                    cfg.bthresh4 = resp.level
             elif isinstance(resp, BuzzerResponse):
                 cfg.buzzer = resp.mode
             elif isinstance(resp, AVRModeResponse):
@@ -1238,14 +1388,13 @@ class JuicerClient:
                 cfg.scroll_mode = resp.mode
             elif isinstance(resp, SleepModeResponse):
                 cfg.sleep_mode = resp.mode
-            elif isinstance(resp, NormalVoltResponse):
-                cfg.normalvolt = resp.voltage
             elif isinstance(resp, InvalidParameterResponse):
                 raise ProtocolError("?LIST_CONFIG: device returned $INVALID_PARAMETER")
             else:
                 raise ProtocolError(f"?LIST_CONFIG: unexpected response {resp!r}")
         return cfg
 
+    @_with_prompt_drain
     def query_help(self) -> list[str]:
         """Send ``?HELP`` and return the list of command/query names."""
         self._send(query_help())
@@ -1259,3 +1408,29 @@ class JuicerClient:
             else:
                 raise ProtocolError(f"?HELP: unexpected response {resp!r}")
         return lines
+
+    # ── Connection lifecycle ──────────────────────────────────────────
+
+    def initialize(self) -> None:
+        """Establish a known protocol environment on the device.
+
+        Drains any leftover bytes on the transport, then sets feedback and
+        line-feed modes to documented defaults so subsequent reads parse
+        deterministically.  Failures are swallowed and logged because some
+        emulator builds (and FakeTransport-based tests) do not implement
+        the configuration commands; the client must still function.
+        """
+        try:
+            self.transport.drain()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("Transport drain during initialize raised %r", exc)
+        for setter, value in (
+            (self.set_feedback, FeedbackMode.ON),
+            (self.set_linefeed, LinefeedMode.OFF),
+        ):
+            try:
+                setter(value)
+            except Exception as exc:
+                logger.debug(
+                    "initialize: %s(%s) failed (%s); continuing", setter.__name__, value, exc
+                )

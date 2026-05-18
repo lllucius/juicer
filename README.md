@@ -654,6 +654,25 @@ transport's `read_line()` implementation intentionally preserves the first byte
 of the next response if the byte after CR is **not** LF. That prevents line
 boundary corruption when the device sends CR-only responses back-to-back.
 
+### Real-device response quirks
+
+The real F1500-UPS firmware differs from the printed manual in several places:
+
+- After command output, the device prints a bare `>` character (0x3E, no CR)
+  as a shell-style ready prompt. The prompt is not part of the response; the
+  Python client raises `PromptReceived` internally when it sees this byte.
+- Many responses omit spaces, such as `$BANK1=ON`, `$BUZZER=OFF`, and
+  `$BTHRESH3=060`.
+- `!ALL_ON` and `!ALL_OFF` also report `$BUTTON=ON`.
+- `!SET_FEEDBACK OFF`, `!SET_LINEFEED`, `!SET_BRIGHT`, `!SET_SCROLLMODE`, and
+  `!SET_SLEEPMODE` print only the `>` ready prompt with no data line.
+- `!SET_LINEFEED ON` confirms as `LINEFEED=ON` without the leading `$`.
+- `?VOLTAGE` reports `$VOLTS_IN=<value>`.
+- `?LIST_CONFIG` reports bank 3 and bank 4 thresholds separately.
+- The manual lists `!SET_NORMALVOLT`, `?BATTSTATE`, and `?TIME`, but the real
+  firmware rejects them with `$INVALID_PARAMETER`. The client and GUI do not
+  expose these commands.
+
 ### High-level client behavior
 
 `JuicerClient` offers blocking methods that:
@@ -667,8 +686,10 @@ boundary corruption when the device sends CR-only responses back-to-back.
 ### Fake transport
 
 The in-memory `FakeTransport` exists so tests can queue expected response lines
-without opening a real serial device. This is a key reason the protocol module
-has high test coverage and remains safe to refactor.
+without opening a real serial device. Call `enqueue_prompt()` to simulate a
+real-device `>` ready prompt; `read_line()` will raise `PromptReceived` just as
+`SerialTransport` does when it receives the `>` byte. This is a key reason the
+protocol module has high test coverage and remains safe to refactor.
 
 ---
 
@@ -698,6 +719,17 @@ python -m pytest
 python -m juicer --help
 python -m juicer.gui
 ```
+
+### Capturing raw Furman serial responses
+
+To collect real-device prompt characters and unparsed response bytes, run:
+
+```bash
+python scripts/capture_furman_protocol.py --port COM3 --output furman-capture.txt --yes
+```
+
+The capture script issues the full command set, including outlet switching and
+`!RESET_ALL`, so only run it when it is safe for attached equipment.
 
 ### Design principles worth knowing
 
