@@ -6,7 +6,7 @@ PySide6 is not bundled into the executable.
 Build with::
 
     # from the repository root
-    uv run pyinstaller scripts/juicer_gui.spec
+    poetry run pyinstaller scripts/juicer_gui.spec
 
 The output is ``dist/juicer-gui.exe``.
 """

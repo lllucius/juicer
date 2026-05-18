@@ -7,7 +7,7 @@ commands fail gracefully when pywin32 is not present.
 Build with::
 
     # from the repository root
-    uv run pyinstaller scripts/juicer_cli.spec
+    poetry run pyinstaller scripts/juicer_cli.spec
 
 The output is ``dist/juicer.exe``.
 """

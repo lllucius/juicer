@@ -4,11 +4,11 @@
 #
 # Prerequisites
 # -------------
-# pip install pyinstaller pyinstaller-hooks-contrib pywin32
+# poetry install --with build --extras windows
 #
 # Build (from the repository root)
 # ---------------------------------
-# pyinstaller scripts/juicer_service.spec
+# poetry run pyinstaller scripts/juicer_service.spec
 #
 # Output
 # ------
@@ -16,12 +16,8 @@
 #
 # Deployment
 # ----------
-# Preferred workflow:
-#
-#   pwsh -File scripts/build-service.ps1 -Clean -Deploy
-#
-# Or copy juicer_service.exe next to the Python interpreter (e.g. the venv's
-# Scripts/ directory) or into %PROGRAMDATA%\Juicer\. Then run:
+# Copy juicer_service.exe into %PROGRAMDATA%\Juicer\ or next to the Python
+# interpreter running ``juicer service install``, then run:
 #
 #   juicer service install
 #

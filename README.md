@@ -96,7 +96,7 @@ juicer/
 ├── manual.pdf
 ├── manual.txt
 ├── pyproject.toml
-├── uv.lock
+├── poetry.lock
 └── README.md
 ```
 
@@ -194,90 +194,56 @@ The tests are grouped by behavior:
 
 ## Installation
 
-Juicer uses [uv](https://docs.astral.sh/uv/) for all project and environment
-management. Install uv first if it is not already present:
+Juicer uses [Poetry](https://python-poetry.org/) for all project and environment
+management. Install Poetry first if it is not already present:
 
 ```bash
-# macOS / Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Windows PowerShell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+curl -sSL https://install.python-poetry.org | python3 -
 ```
 
-### Recommended: install with `uv`
+### Install with Poetry
 
 ```bash
 git clone https://github.com/lllucius/juicer.git
 cd juicer
 
 # Runtime package only
-./scripts/install-uv.sh
+poetry install
 
 # Runtime package + GUI dependencies
-./scripts/install-uv.sh --gui
+poetry install --extras gui
 
-# Developer install (includes dev tools: pytest, ruff, mypy)
-./scripts/install-uv.sh --dev
-
-# Developer install with GUI
-./scripts/install-uv.sh --dev --gui
-```
-
-On Windows PowerShell:
-
-```powershell
-pwsh -File scripts/install-uv.ps1 -Windows
-pwsh -File scripts/install-uv.ps1 -Dev -Windows
-```
-
-If PowerShell blocks the installer after download or clone:
-
-```powershell
-Unblock-File scripts/install-uv.ps1
-```
-
-### Manual `uv` workflow
-
-```bash
-# Sync the default environment (runtime deps only)
-uv sync --no-group dev --no-group build
-
-# With GUI extra
-uv sync --no-group dev --no-group build --extra gui
-
-# With Windows extra
-uv sync --no-group dev --no-group build --extra windows
+# With Windows service dependencies (on Windows)
+poetry install --extras windows
 
 # Full developer environment
-uv sync --group dev --extra gui --extra windows
+poetry install --with dev --extras "gui windows"
 ```
 
 ### Activate the environment
 
-POSIX shells:
+Poetry manages the virtual environment automatically. To open a shell inside it:
 
 ```bash
-source .venv/bin/activate
+poetry shell
 ```
 
-Windows PowerShell:
+Or run a single command without activating:
 
-```powershell
-.venv\Scripts\Activate.ps1
+```bash
+poetry run juicer --help
 ```
 
 ### Smoke-test the install
 
 ```bash
-juicer --help
-python -m juicer --help
+poetry run juicer --help
 ```
 
 If PySide6 is installed:
 
 ```bash
-juicer-gui
+poetry run juicer-gui
 ```
 
 ---
@@ -639,10 +605,16 @@ of `pythonservice.exe`. This avoids service-start failures caused by an
 unactivated virtual environment, a missing Python DLL, or missing site-packages
 when the Service Control Manager starts the process.
 
-From a Windows PowerShell prompt:
+First install the build dependencies:
 
 ```powershell
-pwsh -File scripts/build-service.ps1 -Clean
+poetry install --with build --extras windows
+```
+
+Then build from the repository root:
+
+```powershell
+poetry run pyinstaller --clean --noconfirm scripts/juicer_service.spec
 ```
 
 The build output is:
@@ -651,32 +623,29 @@ The build output is:
 dist\juicer_service.exe
 ```
 
-The script runs `uv sync --group build --extra windows` before invoking
-PyInstaller, so the build tooling is always up-to-date.
-
-To build and copy the executable to `%PROGRAMDATA%\Juicer`:
+Copy `dist\juicer_service.exe` to `%PROGRAMDATA%\Juicer\`, then install and
+start the service:
 
 ```powershell
-pwsh -File scripts/build-service.ps1 -Clean -Deploy
+poetry run juicer service install
+poetry run juicer service start
 ```
 
-To build, deploy, install, and start the service in one pass:
-
-```powershell
-pwsh -File scripts/build-service.ps1 -Clean -Install -Start
-```
-
-Run the deploy/install/start command from an elevated shell if Windows blocks
-writing to `%PROGRAMDATA%` or service installation. `-Install` and `-Start`
-delegate to the same `juicer service install` / `juicer service start` helpers
-used by the GUI and CLI.
+Run those commands from an elevated shell if Windows blocks writing to
+`%PROGRAMDATA%` or service installation.
 
 ### Build the CLI executable
 
-To build a self-contained `juicer.exe` command-line executable:
+Install the build dependencies:
 
 ```powershell
-pwsh -File scripts/build-cli.ps1 -Clean
+poetry install --with build --extras windows
+```
+
+Then build:
+
+```powershell
+poetry run pyinstaller --clean --noconfirm scripts/juicer_cli.spec
 ```
 
 The build output is:
@@ -685,18 +654,18 @@ The build output is:
 dist\juicer.exe
 ```
 
-To build and copy to `%PROGRAMDATA%\Juicer`:
-
-```powershell
-pwsh -File scripts/build-cli.ps1 -Clean -Deploy
-```
-
 ### Build the GUI executable
 
-To build a self-contained `juicer-gui.exe` desktop application:
+Install the build dependencies:
 
 ```powershell
-pwsh -File scripts/build-gui.ps1 -Clean
+poetry install --with build --extras "gui windows"
+```
+
+Then build:
+
+```powershell
+poetry run pyinstaller --clean --noconfirm scripts/juicer_gui.spec
 ```
 
 The build output is:
@@ -704,16 +673,6 @@ The build output is:
 ```text
 dist\juicer-gui.exe
 ```
-
-To build and copy to `%PROGRAMDATA%\Juicer`:
-
-```powershell
-pwsh -File scripts/build-gui.ps1 -Clean -Deploy
-```
-
-Both build scripts run `uv sync` with the appropriate extras and then invoke
-PyInstaller via `uv run` so that the build always uses the locked dependency
-versions from `uv.lock`.
 
 ### Manual service installation
 
@@ -804,13 +763,7 @@ protocol module has high test coverage and remains safe to refactor.
 ### Local development install
 
 ```bash
-uv sync --group dev
-```
-
-Or use the convenience script:
-
-```bash
-./scripts/install-uv.sh --dev
+poetry install --with dev
 ```
 
 ### Validation commands
@@ -818,25 +771,36 @@ Or use the convenience script:
 From the repository root:
 
 ```bash
-uv run ruff check src tests
-uv run mypy src
-uv run pytest
+poetry run ruff check src tests
+poetry run mypy src
+poetry run pytest
 ```
 
 ### Running from source
 
 ```bash
-uv run juicer --help
-uv run python -m juicer.gui
+poetry run juicer --help
+poetry run python -m juicer.gui
 ```
 
 ### Updating dependencies
 
-To add or update a dependency, edit `pyproject.toml` and re-lock:
+To add a dependency:
 
 ```bash
-uv lock
-uv sync
+poetry add <package>
+```
+
+To add a development dependency:
+
+```bash
+poetry add --group dev <package>
+```
+
+To update all dependencies to their latest allowed versions:
+
+```bash
+poetry update
 ```
 
 ### Capturing raw Furman serial responses
@@ -844,7 +808,7 @@ uv sync
 To collect real-device prompt characters and unparsed response bytes, run:
 
 ```bash
-uv run python scripts/capture_furman_protocol.py --port COM3 --output furman-capture.txt --yes
+poetry run python scripts/capture_furman_protocol.py --port COM3 --output furman-capture.txt --yes
 ```
 
 The capture script issues the full command set, including outlet switching and
@@ -881,7 +845,7 @@ tested on Linux or macOS.
 Install runtime dependencies:
 
 ```bash
-uv sync
+poetry install
 ```
 
 ### `PySide6 is required for the GUI`
@@ -889,7 +853,7 @@ uv sync
 Install the GUI extra:
 
 ```bash
-uv sync --extra gui
+poetry install --extras gui
 ```
 
 ### `pywin32 is required for service operations`
@@ -897,7 +861,7 @@ uv sync --extra gui
 Install the Windows extra on a Windows machine:
 
 ```bash
-uv sync --extra windows
+poetry install --extras windows
 ```
 
 ### The saved port does not auto-connect

@@ -4,14 +4,11 @@
 #
 # Prerequisites
 # -------------
-# uv sync --group build --extra gui --extra windows
+# poetry install --with build --extras gui,windows
 #
 # Build (from the repository root)
 # ---------------------------------
-# uv run pyinstaller scripts/juicer_gui.spec
-#
-# Or use the build script:
-#   pwsh -File scripts/build-gui.ps1
+# poetry run pyinstaller scripts/juicer_gui.spec
 #
 # Output
 # ------
