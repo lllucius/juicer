@@ -60,6 +60,46 @@ SERVICE_DISPLAY_NAME = "Juicer UPS Controller"
 SERVICE_DESCRIPTION = "Controls Furman F1500-UPS E outlet banks via RS-232 serial"
 SERVICE_DEPS = ["Serenum", "Serial"]
 
+
+def _evtlog(message: str, *, error: bool = False) -> None:
+    """Write directly to the Windows Application Event Log using pure ctypes.
+
+    This helper has **no** pywin32 dependency: it calls ``advapi32.dll``
+    directly via :mod:`ctypes`, which is always available in the standard
+    library.  It can therefore fire at any point in the service process
+    lifetime, including module-level code that runs before pywin32 is
+    imported.
+
+    Events are written to the ``Application`` log under source ``Juicer``.
+    *All* errors are silently swallowed — this is diagnostic-only and must
+    never crash the process that calls it.
+    """
+    windll = getattr(ctypes, "windll", None)
+    if windll is None:
+        return
+    try:
+        advapi32 = windll.advapi32
+        # EVENTLOG_ERROR_TYPE = 1  EVENTLOG_INFORMATION_TYPE = 4
+        event_type = ctypes.c_ushort(1 if error else 4)
+        h = advapi32.RegisterEventSourceW(None, SERVICE_NAME)
+        if h:
+            c_strings = (ctypes.c_wchar_p * 1)(message)
+            advapi32.ReportEventW(
+                h,
+                event_type,
+                ctypes.c_ushort(0),  # wCategory
+                ctypes.c_uint(0),  # dwEventID (0 = generic)
+                None,  # lpUserSid
+                ctypes.c_ushort(1),  # wNumStrings
+                ctypes.c_uint(0),  # dwDataSize
+                c_strings,
+                None,  # lpRawData
+            )
+            advapi32.DeregisterEventSource(h)
+    except Exception:  # pragma: no cover
+        pass
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Service Framework (Windows-only at runtime)
 # ──────────────────────────────────────────────────────────────────────
@@ -76,6 +116,25 @@ if _WINDOWS:
         _PYWIN32_AVAILABLE = False
 else:
     _PYWIN32_AVAILABLE = False
+
+# ── Module-level startup breadcrumb ───────────────────────────────────
+# When pythonservice.exe loads this module as a service class, emit a
+# checkpoint to the Windows Application Event Log *before* any class
+# methods run.  This is the earliest possible diagnostic point: if this
+# message appears in Event Viewer but SvcDoRun never fires, the failure
+# is in class instantiation; if this message does NOT appear, the
+# failure is even earlier (Python interpreter start, wrong executable,
+# or a crash before this line).
+_IS_PYTHONSERVICE = _WINDOWS and "pythonservice" in Path(sys.executable).name.lower()
+
+if _IS_PYTHONSERVICE:
+    _evtlog(
+        f"{SERVICE_NAME}: service.py module loaded — "
+        f"exe={sys.executable!r} "
+        f"prefix={sys.prefix!r} "
+        f"pywin32={_PYWIN32_AVAILABLE} "
+        f"path={sys.path[:4]!r}"
+    )
 
 
 def _ensure_pywin32() -> None:
@@ -373,6 +432,7 @@ if _PYWIN32_AVAILABLE:
 
         def __init__(self, args: list[str]) -> None:
             """Create the service instance and allocate its stop event handle."""
+            _evtlog(f"{SERVICE_NAME}: JuicerService.__init__ reached")
             win32serviceutil.ServiceFramework.__init__(self, args)
             self.stop_event = win32event.CreateEvent(None, True, False, None)
             self._shutdown_done = False
@@ -400,6 +460,7 @@ if _PYWIN32_AVAILABLE:
             handler, early failures left ``C:\\ProgramData\\Juicer`` empty and
             users had no way to diagnose service start timeouts.
             """
+            _evtlog(f"{SERVICE_NAME}: SvcDoRun reached")
             installed = _install_service_log_handler("service")
             service_log_handler = installed[0] if installed is not None else None
             service_log_path = installed[1] if installed is not None else None
