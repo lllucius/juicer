@@ -25,6 +25,16 @@ from __future__ import annotations
 import ctypes
 import sys
 
+# When running directly with `python scripts/juicer_service_entry.py` (not as a
+# PyInstaller-frozen bundle) the juicer package lives in src/ relative to the
+# repository root.  Add it to sys.path so the import works in both cases.
+if not getattr(sys, "frozen", False):
+    import os as _os
+
+    _src = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "src")
+    if _src not in sys.path:
+        sys.path.insert(0, _src)
+
 
 # ── Earliest possible diagnostic breadcrumb ──────────────────────────────────
 # This fires before any juicer or pywin32 imports.  If it appears in Event
@@ -67,20 +77,57 @@ def main() -> None:
     # Running as a Windows service (SCM provides no arguments).
     if len(sys.argv) == 1:
         _early_evtlog("juicer_service.exe: starting SCM dispatcher")
-        import servicemanager
+        try:
+            import servicemanager
+        except ImportError as exc:
+            msg = (
+                f"juicer_service: cannot import servicemanager — {exc}\n"
+                "Make sure pywin32 is installed: pip install pywin32"
+            )
+            _early_evtlog(msg, error=True)
+            print(msg, file=sys.stderr)
+            sys.exit(1)
 
-        from juicer.service import JuicerService
+        try:
+            from juicer.service import JuicerService
+        except Exception as exc:
+            import traceback
+
+            msg = f"juicer_service: cannot import juicer.service — {exc}\n{traceback.format_exc()}"
+            _early_evtlog(msg, error=True)
+            print(msg, file=sys.stderr)
+            sys.exit(1)
 
         _early_evtlog("juicer_service.exe: imports OK, calling StartServiceCtrlDispatcher")
-        servicemanager.Initialize()
-        servicemanager.PrepareToHostSingle(JuicerService)
-        servicemanager.StartServiceCtrlDispatcher()
+        try:
+            servicemanager.Initialize()
+            servicemanager.PrepareToHostSingle(JuicerService)
+            servicemanager.StartServiceCtrlDispatcher()
+        except Exception as exc:
+            import traceback
+
+            msg = (
+                f"juicer_service: StartServiceCtrlDispatcher failed — {exc}\n"
+                f"{traceback.format_exc()}"
+            )
+            _early_evtlog(msg, error=True)
+            print(msg, file=sys.stderr)
+            sys.exit(1)
     else:
         # Manual invocation: install, uninstall, start, stop, debug, …
         _early_evtlog(f"juicer_service.exe: HandleCommandLine args={sys.argv[1:]!r}")
-        import win32serviceutil
+        try:
+            import win32serviceutil
 
-        from juicer.service import JuicerService
+            from juicer.service import JuicerService
+        except ImportError as exc:
+            msg = (
+                f"juicer_service: cannot import win32serviceutil or juicer.service — {exc}\n"
+                "Make sure pywin32 is installed: pip install pywin32"
+            )
+            _early_evtlog(msg, error=True)
+            print(msg, file=sys.stderr)
+            sys.exit(1)
 
         win32serviceutil.HandleCommandLine(JuicerService)
 
