@@ -517,30 +517,24 @@ def test_service_log_path_falls_back_when_config_import_fails(
     """A broken config must not prevent service.log from being written."""
     import juicer.service as service_module
 
-    def raising_default() -> Path:
-        return tmp_path / "fallback-juicer"
-
-    def fake_tomlstore() -> object:
-        raise RuntimeError("config import broken")
-
-    monkeypatch.setattr(service_module, "_default_service_log_dir", raising_default)
-    # Force the inner import to raise by removing juicer.config from sys.modules
-    # and shadowing it with a broken module.
-    import sys as _sys
-
+    monkeypatch.setattr(
+        service_module,
+        "_default_service_log_dir",
+        lambda: tmp_path / "fallback-juicer",
+    )
+    # Force the inner import to raise by shadowing juicer.config with a broken
+    # module that raises whenever TomlStore is constructed.
     broken = types.ModuleType("juicer.config")
 
     def broken_tomlstore(*args: object, **kwargs: object) -> object:
         raise RuntimeError("config import broken")
 
     broken.TomlStore = broken_tomlstore  # type: ignore[attr-defined]
-    monkeypatch.setitem(_sys.modules, "juicer.config", broken)
+    monkeypatch.setitem(sys.modules, "juicer.config", broken)
 
     path = service_module._service_log_path("service")
 
     assert path == tmp_path / "fallback-juicer" / "service.log"
-    # Confirm helper actually used the fallback name
-    del fake_tomlstore  # silence unused warning
 
 
 def test_install_service_log_handler_creates_file(
