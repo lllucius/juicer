@@ -37,7 +37,6 @@ from juicer.config import (
     SequenceConfig,
     TomlStore,
 )
-from juicer.protocol import UnsupportedCommandError
 
 logger = logging.getLogger(__name__)
 
@@ -883,8 +882,6 @@ if _PYSIDE6_AVAILABLE:
                 ("voltage", "Voltage:"),
                 ("load", "Load:"),
                 ("battery", "Battery:"),
-                ("battery_state", "Battery State:"),
-                ("backup_time", "Backup Time:"),
             ):
                 value = QLabel("Unknown")
                 value.setAccessibleName(f"Device {label.rstrip(':')}")
@@ -933,8 +930,6 @@ if _PYSIDE6_AVAILABLE:
             form.addRow(_label("&Scroll:", self.combo_scroll), self.combo_scroll)
             self.combo_sleep = self._combo(["30SEC", "60SEC", "OFF"], "Sleep Mode")
             form.addRow(_label("Sleep:", self.combo_sleep), self.combo_sleep)
-            self.combo_normalvolt = self._combo(["220", "230", "240"], "Normal Voltage")
-            form.addRow(_label("Normal Volta&ge:", self.combo_normalvolt), self.combo_normalvolt)
 
             self.spin_bthresh3 = QSpinBox()
             self.spin_bthresh3.setAccessibleName("Bank 3 Battery Threshold")
@@ -1003,7 +998,6 @@ if _PYSIDE6_AVAILABLE:
                 self.combo_brightness,
                 self.combo_scroll,
                 self.combo_sleep,
-                self.combo_normalvolt,
                 self.spin_bthresh3,
                 self.spin_bthresh4,
                 self.btn_load,
@@ -1022,7 +1016,6 @@ if _PYSIDE6_AVAILABLE:
                 "brightness": self.combo_brightness.currentData(),
                 "scroll_mode": self.combo_scroll.currentData(),
                 "sleep_mode": self.combo_sleep.currentData(),
-                "normalvolt": self.combo_normalvolt.currentData(),
                 "bthresh3": self.spin_bthresh3.value(),
                 "bthresh4": self.spin_bthresh4.value(),
             }
@@ -1037,7 +1030,6 @@ if _PYSIDE6_AVAILABLE:
                 "brightness": self.combo_brightness,
                 "scroll_mode": self.combo_scroll,
                 "sleep_mode": self.combo_sleep,
-                "normalvolt": self.combo_normalvolt,
             }
             for key, combo in mapping.items():
                 value = values.get(key)
@@ -1390,20 +1382,6 @@ if _PYSIDE6_AVAILABLE:
                 status["battery"] = f"{bat.level}%"
             except Exception as exc:
                 status["battery"] = f"Unavailable ({exc})"
-            try:
-                bat_state = client.query_battery_state()
-                status["battery_state"] = bat_state.state.value
-            except UnsupportedCommandError:
-                status["battery_state"] = "Unsupported by device"
-            except Exception as exc:
-                status["battery_state"] = f"Unavailable ({exc})"
-            try:
-                backup = client.query_backup_time()
-                status["backup_time"] = f"{backup.minutes} minutes"
-            except UnsupportedCommandError:
-                status["backup_time"] = "Unsupported by device"
-            except Exception as exc:
-                status["backup_time"] = f"Unavailable ({exc})"
             return status
 
         def _apply_status_result(self, status: dict[str, str]) -> None:
@@ -1558,16 +1536,11 @@ if _PYSIDE6_AVAILABLE:
                     "brightness": cfg.brightness.value if cfg.brightness else None,
                     "scroll_mode": cfg.scroll_mode.value if cfg.scroll_mode else None,
                     "sleep_mode": cfg.sleep_mode.value if cfg.sleep_mode else None,
-                    "normalvolt": cfg.normalvolt.value if cfg.normalvolt else None,
                 }
                 if cfg.bthresh3 is not None:
                     values["bthresh3"] = cfg.bthresh3
-                elif cfg.bthresh is not None:
-                    values["bthresh3"] = cfg.bthresh
                 if cfg.bthresh4 is not None:
                     values["bthresh4"] = cfg.bthresh4
-                elif cfg.bthresh is not None:
-                    values["bthresh4"] = cfg.bthresh
                 return values
 
             def success(result: object) -> None:
@@ -1592,7 +1565,6 @@ if _PYSIDE6_AVAILABLE:
 
             def apply() -> object:
                 """Send each config-setting command and then reload status text."""
-                normal_volt_skipped = False
                 self._client.set_buzzer(cast(str, values["buzzer"]))
                 self._client.set_avr(cast(str, values["avr"]))
                 self._client.set_feedback(cast(str, values["feedback"]))
@@ -1600,29 +1572,14 @@ if _PYSIDE6_AVAILABLE:
                 self._client.set_bright(cast(str, values["brightness"]))
                 self._client.set_scrollmode(cast(str, values["scroll_mode"]))
                 self._client.set_sleepmode(cast(str, values["sleep_mode"]))
-                try:
-                    self._client.set_normalvolt(cast(str, values["normalvolt"]))
-                except UnsupportedCommandError:
-                    normal_volt_skipped = True
-                    logger.info("Skipping unsupported !SET_NORMALVOLT")
                 self._client.set_batthresh(3, cast(int, values["bthresh3"]))
                 self._client.set_batthresh(4, cast(int, values["bthresh4"]))
-                notice = (
-                    "Normal voltage unsupported by device; skipped"
-                    if normal_volt_skipped
-                    else None
-                )
-                result: tuple[dict[str, str], str | None] = (
-                    self._collect_status(self._client),
-                    notice,
-                )
-                return result
+                return self._collect_status(self._client)
 
             def success(result: object) -> None:
                 """Refresh status panels after device settings are applied."""
-                status, notice = cast(tuple[dict[str, str], str | None], result)
-                self._apply_status_result(status)
-                self.status_bar.showMessage(notice or "Device configuration applied")
+                self._apply_status_result(cast(dict[str, str], result))
+                self.status_bar.showMessage("Device configuration applied")
 
             def error(message: str) -> None:
                 """Report a failure while applying configuration to the UPS."""

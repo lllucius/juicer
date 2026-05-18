@@ -1,7 +1,11 @@
 """Juicer serial protocol — commands, responses, transport, and client.
 
-Implements the complete Furman F1500-UPS E RS-232 protocol from manual.txt:
-13 commands, 10 queries, all response families, plus transport abstraction.
+Implements the Furman F1500-UPS E RS-232 protocol as observed empirically
+on real hardware (see ``scripts/capture_furman_protocol.py``): 12 action
+commands, 10 queries, plus transport abstraction.  Commands that the
+manual documents but the real firmware rejects with ``$INVALID_PARAMETER``
+(``!SET_NORMALVOLT``, ``?BATTSTATE``, ``?TIME``) are intentionally not
+supported here.
 
 All command construction and response parsing works without a real serial port.
 """
@@ -32,10 +36,6 @@ class JuicerError(Exception):
 
 class ProtocolError(JuicerError):
     """Invalid or unexpected data on the wire."""
-
-
-class UnsupportedCommandError(ProtocolError):
-    """The connected firmware rejected a command/query as unsupported."""
 
 
 class JuicerTimeoutError(JuicerError):
@@ -147,29 +147,6 @@ class SleepMode(str, enum.Enum):
     OFF = "OFF"
 
 
-class NormalVolt(str, enum.Enum):
-    """Nominal mains voltage configuration reported by the UPS."""
-
-    V220 = "220"
-    V230 = "230"
-    V240 = "240"
-
-
-class AVRState(str, enum.Enum):
-    """Active AVR correction direction when regulation is engaged."""
-
-    BOOST = "BOOST"
-    BUCK = "BUCK"
-
-
-class BatteryChargeState(str, enum.Enum):
-    """Current battery charging direction or fully charged state."""
-
-    CHARGE = "CHARGE"
-    DISCHARGE = "DISCHARGE"
-    FULL = "FULL"
-
-
 class ButtonState(str, enum.Enum):
     """Front-panel power button enabled/disabled state."""
 
@@ -228,12 +205,6 @@ class BatteryThresholdResponse(BaseModel):
     level: int
 
 
-class BatteryThresholdGlobalResponse(BaseModel):
-    """``$BTHRESH = <level>`` from ``?LIST_CONFIG``."""
-
-    level: int
-
-
 class BuzzerResponse(BaseModel):
     """``$BUZZER = <mode>``."""
 
@@ -276,12 +247,6 @@ class SleepModeResponse(BaseModel):
     mode: SleepMode
 
 
-class NormalVoltResponse(BaseModel):
-    """``$NORMALVOLT = <xxx>``."""
-
-    voltage: NormalVolt
-
-
 class FactoryResetResponse(BaseModel):
     """``$FACTORY SETTINGS RESTORED``."""
 
@@ -298,24 +263,6 @@ class LowBatteryResponse(BaseModel):
     """``$LOWBAT`` (async)."""
 
     pass
-
-
-class AVRStateResponse(BaseModel):
-    """``$AVRSTATE = <BOOST|BUCK>``."""
-
-    state: AVRState
-
-
-class BackupTimeResponse(BaseModel):
-    """``$TIME = <xxx>`` (minutes of backup remaining)."""
-
-    minutes: int
-
-
-class BatteryStateResponse(BaseModel):
-    """``$BATTSTATE = <CHARGE|DISCHARGE|FULL>``."""
-
-    state: BatteryChargeState
 
 
 class VoltsInResponse(BaseModel):
@@ -384,9 +331,13 @@ class PowerMetricsResponse(BaseModel):
 
 
 class ListConfigResponse(BaseModel):
-    """Aggregate of ``?LIST_CONFIG`` response lines."""
+    """Aggregate of ``?LIST_CONFIG`` response lines.
 
-    bthresh: int | None = None
+    Field set matches the real F1500-UPS firmware capture: per-bank
+    battery thresholds (``$BTHRESH3``/``$BTHRESH4``) plus buzzer, AVR
+    mode, feedback, linefeed, brightness, scroll mode, and sleep mode.
+    """
+
     bthresh3: int | None = None
     bthresh4: int | None = None
     buzzer: BuzzerMode | None = None
@@ -396,7 +347,6 @@ class ListConfigResponse(BaseModel):
     brightness: Brightness | None = None
     scroll_mode: ScrollMode | None = None
     sleep_mode: SleepMode | None = None
-    normalvolt: NormalVolt | None = None
 
 
 class RawResponse(BaseModel):
@@ -412,7 +362,6 @@ ParsedResponse = (
     | PowerStatusResponse
     | BatteryLevelResponse
     | BatteryThresholdResponse
-    | BatteryThresholdGlobalResponse
     | BuzzerResponse
     | AVRModeResponse
     | FeedbackResponse
@@ -420,13 +369,9 @@ ParsedResponse = (
     | BrightnessResponse
     | ScrollModeResponse
     | SleepModeResponse
-    | NormalVoltResponse
     | FactoryResetResponse
     | InvalidParameterResponse
     | LowBatteryResponse
-    | AVRStateResponse
-    | BackupTimeResponse
-    | BatteryStateResponse
     | VoltsInResponse
     | VoltsOutResponse
     | WattsResponse
@@ -521,12 +466,6 @@ def cmd_reset_all() -> str:
     return f"!RESET_ALL{CR}"
 
 
-def cmd_set_normalvolt(voltage: str | NormalVolt) -> str:
-    """Build ``!SET_NORMALVOLT <xxx>\\r``."""
-    v = NormalVolt(voltage if isinstance(voltage, str) else voltage.value)
-    return f"!SET_NORMALVOLT {v.value}{CR}"
-
-
 # ── Query builders ────────────────────────────────────────────────────
 
 
@@ -570,16 +509,6 @@ def query_batterystat() -> str:
     return f"?BATTERYSTAT{CR}"
 
 
-def query_battstate() -> str:
-    """Build ``?BATTSTATE\\r``."""
-    return f"?BATTSTATE{CR}"
-
-
-def query_time() -> str:
-    """Build ``?TIME\\r``."""
-    return f"?TIME{CR}"
-
-
 def query_list_config() -> str:
     """Build ``?LIST_CONFIG\\r``."""
     return f"?LIST_CONFIG{CR}"
@@ -594,13 +523,12 @@ def query_help() -> str:
 # Line Parser
 # ──────────────────────────────────────────────────────────────────────
 
-# Regex patterns for response lines
+# Regex patterns for response lines (matched against real-firmware capture)
 _RE_BANK = re.compile(r"^\$BANK\s*(\d)\s*=\s*(ON|OFF)$")
 _RE_BUTTON = re.compile(r"^\$BUTTON\s*=\s*(ON|OFF)$")
 _RE_PWR = re.compile(r"^\$PWR\s*=\s*(.+)$")
 _RE_BATTERY = re.compile(r"^\$BATTERY\s*=\s*(\d+)$")
 _RE_BTHRESH = re.compile(r"^\$BTHRESH\s*(\d)\s*=\s*(\d+)$")
-_RE_BTHRESH_GLOBAL = re.compile(r"^\$BTHRESH\s*=\s*(\d+)$")
 _RE_BUZZER = re.compile(r"^\$BUZZER\s*=\s*(ON|OFF)$")
 _RE_AVR_MODE = re.compile(r"^\$AVR\s*=\s*(OFF|STANDARD|SENSITIVE)$")
 _RE_FEEDBACK = re.compile(r"^\$FEEDBACK\s*=\s*(ON|OFF)$")
@@ -608,16 +536,12 @@ _RE_LINEFEED = re.compile(r"^\$?LINEFEED\s*=\s*(ON|OFF)$")
 _RE_BRIGHTNESS = re.compile(r"^\$BRIGHTNESS\s*=\s*(\d+)$")
 _RE_SCROLL = re.compile(r"^\$SCROLL_MODE\s*=\s*(.+)$")
 _RE_SLEEP = re.compile(r"^\$SLEEP_MODE\s*=\s*(.+)$")
-_RE_NORMALVOLT = re.compile(r"^\$NORMALVOLT\s*=\s*(\d+)$")
 _RE_VOLTS_IN = re.compile(r"^\$VOLTS_IN\s*=\s*([\d.]+)$")
 _RE_VOLTS_OUT = re.compile(r"^\$VOLTS_OUT\s*=\s*([\d.]+)$")
 _RE_WATTS = re.compile(r"^\$WATTS\s*=\s*([\d.]+)$")
 _RE_CURRENT = re.compile(r"^\$CURRENT\s*=\s*([\d.]+)$")
 _RE_VOLTAGE = re.compile(r"^\$VOLTAGE\s*=\s*([\d.]+)$")
 _RE_LOAD = re.compile(r"^\$LOAD\s*=\s*([\d.]+)$")
-_RE_AVRSTATE = re.compile(r"^\$AVRSTATE\s*=\s*(BOOST|BUCK)$")
-_RE_TIME = re.compile(r"^\$TIME\s*=\s*(\d+)$")
-_RE_BATTSTATE = re.compile(r"^\$BATTSTATE\s*=\s*(CHARGE|DISCHARGE|FULL)$")
 
 
 def parse_line(line: str) -> ParsedResponse:
@@ -653,8 +577,6 @@ def parse_line(line: str) -> ParsedResponse:
         return BatteryLevelResponse(level=int(m.group(1)))
     if m := _RE_BTHRESH.match(line):
         return BatteryThresholdResponse(bank=BankNumber(int(m.group(1))), level=int(m.group(2)))
-    if m := _RE_BTHRESH_GLOBAL.match(line):
-        return BatteryThresholdGlobalResponse(level=int(m.group(1)))
     if m := _RE_BUZZER.match(line):
         return BuzzerResponse(mode=BuzzerMode(m.group(1)))
     if m := _RE_AVR_MODE.match(line):
@@ -667,8 +589,6 @@ def parse_line(line: str) -> ParsedResponse:
         return ScrollModeResponse(mode=ScrollMode(m.group(1).strip()))
     if m := _RE_SLEEP.match(line):
         return SleepModeResponse(mode=SleepMode(m.group(1).strip()))
-    if m := _RE_NORMALVOLT.match(line):
-        return NormalVoltResponse(voltage=NormalVolt(m.group(1)))
     if m := _RE_VOLTS_IN.match(line):
         return VoltsInResponse(volts=float(m.group(1)))
     if m := _RE_VOLTS_OUT.match(line):
@@ -681,12 +601,6 @@ def parse_line(line: str) -> ParsedResponse:
         return VoltageResponse(volts=float(m.group(1)))
     if m := _RE_LOAD.match(line):
         return LoadResponse(percent=float(m.group(1)))
-    if m := _RE_AVRSTATE.match(line):
-        return AVRStateResponse(state=AVRState(m.group(1)))
-    if m := _RE_TIME.match(line):
-        return BackupTimeResponse(minutes=int(m.group(1)))
-    if m := _RE_BATTSTATE.match(line):
-        return BatteryStateResponse(state=BatteryChargeState(m.group(1)))
 
     # ID response lines (manufacturer, model, firmware) — plain $<text>
     if line.startswith("$"):
@@ -1150,21 +1064,6 @@ class JuicerClient:
             return resp
         raise ProtocolError(f"{label}: expected {expected_type.__name__}, got {resp!r}")
 
-    def _expect_one_or_unsupported(
-        self,
-        expected_type: type[T],
-        *,
-        context: str,
-        timeout: float = 2.0,
-    ) -> T:
-        """Read one response, mapping ``$INVALID_PARAMETER`` to unsupported."""
-        resp = self._recv_parsed(timeout)
-        if isinstance(resp, InvalidParameterResponse):
-            raise UnsupportedCommandError(f"{context}: unsupported by this firmware")
-        if isinstance(resp, expected_type):
-            return resp
-        raise ProtocolError(f"{context}: expected {expected_type.__name__}, got {resp!r}")
-
     def _expect_bank_status(
         self,
         bank: int | BankNumber,
@@ -1349,17 +1248,6 @@ class JuicerClient:
             return resp
         raise ProtocolError(f"Expected FactoryResetResponse, got {resp!r}")
 
-    @_with_prompt_drain
-    def set_normalvolt(self, voltage: str | NormalVolt) -> list[ParsedResponse]:
-        """Send ``!SET_NORMALVOLT``."""
-        self._send(cmd_set_normalvolt(voltage))
-        return [
-            self._expect_one_or_unsupported(
-                NormalVoltResponse,
-                context="!SET_NORMALVOLT",
-            )
-        ]
-
     # ── Queries ───────────────────────────────────────────────────────
 
     @_with_prompt_drain
@@ -1470,38 +1358,22 @@ class JuicerClient:
         raise ProtocolError(f"Expected BatteryLevelResponse, got {resp!r}")
 
     @_with_prompt_drain
-    def query_battery_state(self) -> BatteryStateResponse:
-        """Send ``?BATTSTATE``."""
-        self._send(query_battstate())
-        return self._expect_one_or_unsupported(
-            BatteryStateResponse,
-            context="?BATTSTATE",
-        )
-
-    @_with_prompt_drain
-    def query_backup_time(self) -> BackupTimeResponse:
-        """Send ``?TIME``."""
-        self._send(query_time())
-        return self._expect_one_or_unsupported(
-            BackupTimeResponse,
-            context="?TIME",
-        )
-
-    @_with_prompt_drain
     def query_list_config(self) -> ListConfigResponse:
-        """Send ``?LIST_CONFIG`` and aggregate response lines."""
+        """Send ``?LIST_CONFIG`` and aggregate response lines.
+
+        Real F1500-UPS firmware emits nine lines (BTHRESH3, BTHRESH4,
+        BUZZER, AVR, FEEDBACK, LINEFEED, BRIGHTNESS, SCROLL_MODE,
+        SLEEP_MODE) followed by the ``>`` prompt.
+        """
         self._send(query_list_config())
         cfg = ListConfigResponse()
-        responses = self._recv_variable(min_lines=9, max_lines=10, context="?LIST_CONFIG")
+        responses = self._recv_variable(min_lines=9, max_lines=9, context="?LIST_CONFIG")
         for resp in responses:
             if isinstance(resp, BatteryThresholdResponse):
-                cfg.bthresh = resp.level
                 if resp.bank == BankNumber.BANK3:
                     cfg.bthresh3 = resp.level
                 elif resp.bank == BankNumber.BANK4:
                     cfg.bthresh4 = resp.level
-            elif isinstance(resp, BatteryThresholdGlobalResponse):
-                cfg.bthresh = resp.level
             elif isinstance(resp, BuzzerResponse):
                 cfg.buzzer = resp.mode
             elif isinstance(resp, AVRModeResponse):
@@ -1516,8 +1388,6 @@ class JuicerClient:
                 cfg.scroll_mode = resp.mode
             elif isinstance(resp, SleepModeResponse):
                 cfg.sleep_mode = resp.mode
-            elif isinstance(resp, NormalVoltResponse):
-                cfg.normalvolt = resp.voltage
             elif isinstance(resp, InvalidParameterResponse):
                 raise ProtocolError("?LIST_CONFIG: device returned $INVALID_PARAMETER")
             else:

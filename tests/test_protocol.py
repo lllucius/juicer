@@ -11,16 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from juicer.protocol import (
     AVRMode,
     AVRModeResponse,
-    AVRState,
-    AVRStateResponse,
-    BackupTimeResponse,
     BankNumber,
     BankState,
     BankStatusResponse,
-    BatteryChargeState,
     BatteryLevelResponse,
-    BatteryStateResponse,
-    BatteryThresholdGlobalResponse,
     BatteryThresholdResponse,
     Brightness,
     BrightnessResponse,
@@ -41,8 +35,6 @@ from juicer.protocol import (
     LinefeedResponse,
     LoadResponse,
     LowBatteryResponse,
-    NormalVolt,
-    NormalVoltResponse,
     PowerStatus,
     PowerStatusResponse,
     PromptReceived,
@@ -54,7 +46,6 @@ from juicer.protocol import (
     SleepMode,
     SleepModeResponse,
     TransportError,
-    UnsupportedCommandError,
     ValidationError,
     VoltageResponse,
     VoltsInResponse,
@@ -69,13 +60,11 @@ from juicer.protocol import (
     cmd_set_buzzer,
     cmd_set_feedback,
     cmd_set_linefeed,
-    cmd_set_normalvolt,
     cmd_set_scrollmode,
     cmd_set_sleepmode,
     cmd_switch,
     parse_line,
     query_batterystat,
-    query_battstate,
     query_current,
     query_help,
     query_id,
@@ -84,7 +73,6 @@ from juicer.protocol import (
     query_outletstat,
     query_power,
     query_powerstat,
-    query_time,
     query_voltage,
 )
 
@@ -354,12 +342,6 @@ def test_cmd_reset_all() -> None:
     assert cmd_reset_all() == "!RESET_ALL\r"
 
 
-def test_cmd_set_normalvolt_all_values() -> None:
-    assert cmd_set_normalvolt("220") == "!SET_NORMALVOLT 220\r"
-    assert cmd_set_normalvolt("230") == "!SET_NORMALVOLT 230\r"
-    assert cmd_set_normalvolt(NormalVolt.V240) == "!SET_NORMALVOLT 240\r"
-
-
 # ──────────────────────────────────────────────────────────────────────
 # Query builders
 # ──────────────────────────────────────────────────────────────────────
@@ -395,14 +377,6 @@ def test_query_loadstat() -> None:
 
 def test_query_batterystat() -> None:
     assert query_batterystat() == "?BATTERYSTAT\r"
-
-
-def test_query_battstate() -> None:
-    assert query_battstate() == "?BATTSTATE\r"
-
-
-def test_query_time() -> None:
-    assert query_time() == "?TIME\r"
 
 
 def test_query_list_config() -> None:
@@ -543,39 +517,9 @@ def test_parse_bthresh_bank4() -> None:
     assert r.level == 80
 
 
-def test_parse_global_bthresh() -> None:
-    r = parse_line("$BTHRESH = 80")
-    assert isinstance(r, BatteryThresholdGlobalResponse)
-    assert r.level == 80
-
-
 def test_parse_low_battery() -> None:
     r = parse_line("$LOWBAT")
     assert isinstance(r, LowBatteryResponse)
-
-
-def test_parse_battstate_full() -> None:
-    r = parse_line("$BATTSTATE = FULL")
-    assert isinstance(r, BatteryStateResponse)
-    assert r.state == BatteryChargeState.FULL
-
-
-def test_parse_battstate_charge() -> None:
-    r = parse_line("$BATTSTATE = CHARGE")
-    assert isinstance(r, BatteryStateResponse)
-    assert r.state == BatteryChargeState.CHARGE
-
-
-def test_parse_battstate_discharge() -> None:
-    r = parse_line("$BATTSTATE = DISCHARGE")
-    assert isinstance(r, BatteryStateResponse)
-    assert r.state == BatteryChargeState.DISCHARGE
-
-
-def test_parse_backup_time() -> None:
-    r = parse_line("$TIME = 60")
-    assert isinstance(r, BackupTimeResponse)
-    assert r.minutes == 60
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -641,13 +585,6 @@ def test_parse_sleep_mode_all_values() -> None:
         assert r.mode == mode
 
 
-def test_parse_normalvolt_all_values() -> None:
-    for v in NormalVolt:
-        r = parse_line(f"$NORMALVOLT = {v.value}")
-        assert isinstance(r, NormalVoltResponse)
-        assert r.voltage == v
-
-
 def test_parse_factory_reset() -> None:
     r = parse_line("$FACTORY SETTINGS RESTORED")
     assert isinstance(r, FactoryResetResponse)
@@ -660,20 +597,8 @@ def test_parse_invalid_parameter() -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# parse_line — AVR state and button
+# parse_line — button state
 # ──────────────────────────────────────────────────────────────────────
-
-
-def test_parse_avrstate_boost() -> None:
-    r = parse_line("$AVRSTATE = BOOST")
-    assert isinstance(r, AVRStateResponse)
-    assert r.state == AVRState.BOOST
-
-
-def test_parse_avrstate_buck() -> None:
-    r = parse_line("$AVRSTATE = BUCK")
-    assert isinstance(r, AVRStateResponse)
-    assert r.state == AVRState.BUCK
 
 
 def test_parse_button_on() -> None:
@@ -1080,30 +1005,6 @@ def test_client_reset_all_wrong_response_raises() -> None:
         client.reset_all()
 
 
-def test_client_set_normalvolt_220() -> None:
-    t = _open_fake("$NORMALVOLT = 220")
-    client = JuicerClient(t)
-    result = client.set_normalvolt("220")
-    assert t.last_command == "!SET_NORMALVOLT 220\r"
-    assert isinstance(result[0], NormalVoltResponse)
-    assert result[0].voltage == NormalVolt.V220
-
-
-def test_client_set_normalvolt_all_values() -> None:
-    for v in NormalVolt:
-        t = _open_fake(f"$NORMALVOLT = {v.value}")
-        client = JuicerClient(t)
-        client.set_normalvolt(v)
-        assert t.last_command == f"!SET_NORMALVOLT {v.value}\r"
-
-
-def test_client_set_normalvolt_invalid_parameter_is_unsupported() -> None:
-    t = _open_fake("$INVALID_PARAMETER")
-    client = JuicerClient(t)
-    with pytest.raises(UnsupportedCommandError, match="!SET_NORMALVOLT"):
-        client.set_normalvolt("220")
-
-
 def test_client_invalid_command_returns_invalid_parameter() -> None:
     t = _open_fake("$INVALID_PARAMETER")
     client = JuicerClient(t)
@@ -1295,81 +1196,6 @@ def test_client_query_battery_status_wrong_response_raises() -> None:
         client.query_battery_status()
 
 
-def test_client_query_battery_state_full() -> None:
-    t = _open_fake("$BATTSTATE = FULL")
-    client = JuicerClient(t)
-    result = client.query_battery_state()
-    assert t.last_command == "?BATTSTATE\r"
-    assert isinstance(result, BatteryStateResponse)
-    assert result.state == BatteryChargeState.FULL
-
-
-def test_client_query_battery_state_charge() -> None:
-    t = _open_fake("$BATTSTATE = CHARGE")
-    client = JuicerClient(t)
-    result = client.query_battery_state()
-    assert result.state == BatteryChargeState.CHARGE
-
-
-def test_client_query_battery_state_discharge() -> None:
-    t = _open_fake("$BATTSTATE = DISCHARGE")
-    client = JuicerClient(t)
-    result = client.query_battery_state()
-    assert result.state == BatteryChargeState.DISCHARGE
-
-
-def test_client_query_battery_state_wrong_response_raises() -> None:
-    t = _open_fake("$INVALID_PARAMETER")
-    client = JuicerClient(t)
-    with pytest.raises(UnsupportedCommandError, match=r"\?BATTSTATE"):
-        client.query_battery_state()
-
-
-def test_client_query_backup_time() -> None:
-    t = _open_fake("$TIME = 60")
-    client = JuicerClient(t)
-    result = client.query_backup_time()
-    assert t.last_command == "?TIME\r"
-    assert isinstance(result, BackupTimeResponse)
-    assert result.minutes == 60
-
-
-def test_client_query_backup_time_wrong_response_raises() -> None:
-    t = _open_fake("$INVALID_PARAMETER")
-    client = JuicerClient(t)
-    with pytest.raises(UnsupportedCommandError, match=r"\?TIME"):
-        client.query_backup_time()
-
-
-def test_client_query_list_config_defaults() -> None:
-    t = _open_fake(
-        "$BUZZER = ON",
-        "$AVR = OFF",
-        "$FEEDBACK = ON",
-        "$LINEFEED = OFF",
-        "$BRIGHTNESS = 100",
-        "$SCROLL_MODE = 5SEC",
-        "$SLEEP_MODE = OFF",
-        "$NORMALVOLT = 230",
-        "$BTHRESH 3 = 20",
-        "$BTHRESH 4 = 20",
-    )
-    client = JuicerClient(t)
-    result = client.query_list_config()
-    assert t.last_command == "?LIST_CONFIG\r"
-    assert result.buzzer == BuzzerMode.ON
-    assert result.avr == AVRMode.OFF
-    assert result.feedback == FeedbackMode.ON
-    assert result.linefeed == LinefeedMode.OFF
-    assert result.brightness == Brightness.B100
-    assert result.scroll_mode == ScrollMode.SEC5
-    assert result.sleep_mode == SleepMode.OFF
-    assert result.normalvolt == NormalVolt.V230
-    assert result.bthresh == 20  # last BTHRESH seen (bank 4)
-    assert result.bthresh3 == 20
-    assert result.bthresh4 == 20
-
-
 def test_client_query_list_config_real_device_format() -> None:
     t = _open_fake(
         "$BTHRESH3=060",
@@ -1385,7 +1211,6 @@ def test_client_query_list_config_real_device_format() -> None:
     client = JuicerClient(t)
     result = client.query_list_config()
     assert t.last_command == "?LIST_CONFIG\r"
-    assert result.bthresh == 40
     assert result.bthresh3 == 60
     assert result.bthresh4 == 40
     assert result.buzzer == BuzzerMode.OFF
@@ -1489,25 +1314,16 @@ def test_stateful_configure_then_reset() -> None:
 
 
 def test_stateful_battery_queries() -> None:
-    """Query battery level, state, and backup time in sequence."""
+    """Query battery level in sequence, draining the trailing prompt."""
     t = FakeTransport()
     t.open()
     # Each query reads its data line and then drains the trailing ``>``
-    # prompt that real firmware emits after every response, so each block
-    # must be followed by an enqueue_prompt().
+    # prompt that real firmware emits after every response.
     t.enqueue_response("$BATTERY = 85")
-    t.enqueue_prompt()
-    t.enqueue_response("$BATTSTATE = FULL")
-    t.enqueue_prompt()
-    t.enqueue_response("$TIME = 60")
     t.enqueue_prompt()
     client = JuicerClient(t)
 
     lvl = client.query_battery_status()
-    state = client.query_battery_state()
-    btime = client.query_backup_time()
 
     assert lvl.level == 85
-    assert state.state == BatteryChargeState.FULL
-    assert btime.minutes == 60
-    assert t.written == ["?BATTERYSTAT\r", "?BATTSTATE\r", "?TIME\r"]
+    assert t.written == ["?BATTERYSTAT\r"]

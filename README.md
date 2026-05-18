@@ -669,6 +669,9 @@ The real F1500-UPS firmware differs from the printed manual in several places:
 - `!SET_LINEFEED ON` confirms as `LINEFEED=ON` without the leading `$`.
 - `?VOLTAGE` reports `$VOLTS_IN=<value>`.
 - `?LIST_CONFIG` reports bank 3 and bank 4 thresholds separately.
+- The manual lists `!SET_NORMALVOLT`, `?BATTSTATE`, and `?TIME`, but the real
+  firmware rejects them with `$INVALID_PARAMETER`. The client and GUI do not
+  expose these commands.
 
 ### High-level client behavior
 
