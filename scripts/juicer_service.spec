@@ -8,6 +8,9 @@
 #
 # Build (from the repository root)
 # ---------------------------------
+# poetry run poe build-service
+#
+# Or directly:
 # poetry run pyinstaller scripts/juicer_service.spec
 #
 # Output

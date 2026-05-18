@@ -51,6 +51,12 @@ ruff = ">=0.4"
 [tool.poetry.group.build.dependencies]
 pyinstaller = {version = ">=6.0", python = "<3.15"}
 pyinstaller-hooks-contrib = {version = ">=2024.0", python = "<3.15"}
+poethepoet = ">=0.34"
+
+[tool.poe.tasks]
+build-cli = "pyinstaller --clean --noconfirm scripts/juicer_cli.spec"
+build-gui = "pyinstaller --clean --noconfirm scripts/juicer_gui.spec"
+build-service = "pyinstaller --clean --noconfirm scripts/juicer_service.spec"
 
 [tool.ruff]
 src = ["src"]

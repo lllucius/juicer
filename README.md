@@ -614,7 +614,7 @@ poetry install --with build --extras windows
 Then build from the repository root:
 
 ```powershell
-poetry run pyinstaller --clean --noconfirm scripts/juicer_service.spec
+poetry run poe build-service
 ```
 
 The build output is:
@@ -645,7 +645,7 @@ poetry install --with build --extras windows
 Then build:
 
 ```powershell
-poetry run pyinstaller --clean --noconfirm scripts/juicer_cli.spec
+poetry run poe build-cli
 ```
 
 The build output is:
@@ -665,7 +665,7 @@ poetry install --with build --extras "gui windows"
 Then build:
 
 ```powershell
-poetry run pyinstaller --clean --noconfirm scripts/juicer_gui.spec
+poetry run poe build-gui
 ```
 
 The build output is:
