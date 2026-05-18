@@ -42,7 +42,7 @@ try {
         throw "Dependency installation failed."
     }
 
-    & $Python -m PyInstaller --clean --noconfirm $SpecPath
+    & $Python -m pyinstaller --clean --noconfirm $SpecPath
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller build failed."
     }

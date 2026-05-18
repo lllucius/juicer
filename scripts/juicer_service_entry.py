@@ -13,7 +13,7 @@ When the user runs the exe manually with arguments (``install``, ``uninstall``,
 Build with::
 
     # from the repository root
-    pyinstaller scripts/juicer_service.spec
+    PyInstaller scripts/juicer_service.spec
 
 The output is ``dist/juicer_service.exe``.
 Drop that file next to the Python interpreter (or in ``%PROGRAMDATA%\\Juicer``)
