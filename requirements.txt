@@ -1,4 +1,0 @@
-# Core runtime dependencies for Juicer
-click>=8.1
-pydantic>=2.0
-pyserial>=3.5

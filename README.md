@@ -96,8 +96,7 @@ juicer/
 ├── manual.pdf
 ├── manual.txt
 ├── pyproject.toml
-├── requirements.txt
-├── requirements-dev.txt
+├── uv.lock
 └── README.md
 ```
 
@@ -195,7 +194,16 @@ The tests are grouped by behavior:
 
 ## Installation
 
-Juicer is designed to install cleanly from source.
+Juicer uses [uv](https://docs.astral.sh/uv/) for all project and environment
+management. Install uv first if it is not already present:
+
+```bash
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows PowerShell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
 
 ### Recommended: install with `uv`
 
@@ -203,13 +211,13 @@ Juicer is designed to install cleanly from source.
 git clone https://github.com/lllucius/juicer.git
 cd juicer
 
-# Runtime package
+# Runtime package only
 ./scripts/install-uv.sh
 
 # Runtime package + GUI dependencies
 ./scripts/install-uv.sh --gui
 
-# Developer install
+# Developer install (includes dev tools: pytest, ruff, mypy)
 ./scripts/install-uv.sh --dev
 
 # Developer install with GUI
@@ -232,14 +240,18 @@ Unblock-File scripts/install-uv.ps1
 ### Manual `uv` workflow
 
 ```bash
-uv venv
-uv pip install --python .venv/bin/python .
-uv pip install --python .venv/bin/python ".[gui]"
-uv pip install --python .venv/bin/python ".[windows]"
-uv pip install --python .venv/bin/python ".[dev]"
-```
+# Sync the default environment (runtime deps only)
+uv sync --no-group dev --no-group build
 
-On Windows, use `.venv\Scripts\python.exe` in the `--python` argument.
+# With GUI extra
+uv sync --no-group dev --no-group build --extra gui
+
+# With Windows extra
+uv sync --no-group dev --no-group build --extra windows
+
+# Full developer environment
+uv sync --group dev --extra gui --extra windows
+```
 
 ### Activate the environment
 
@@ -639,8 +651,8 @@ The build output is:
 dist\juicer_service.exe
 ```
 
-The script installs Juicer's Windows extra plus the PyInstaller build tooling
-into the selected Python environment before running the build.
+The script runs `uv sync --group build --extra windows` before invoking
+PyInstaller, so the build tooling is always up-to-date.
 
 To build and copy the executable to `%PROGRAMDATA%\Juicer`:
 
@@ -658,6 +670,50 @@ Run the deploy/install/start command from an elevated shell if Windows blocks
 writing to `%PROGRAMDATA%` or service installation. `-Install` and `-Start`
 delegate to the same `juicer service install` / `juicer service start` helpers
 used by the GUI and CLI.
+
+### Build the CLI executable
+
+To build a self-contained `juicer.exe` command-line executable:
+
+```powershell
+pwsh -File scripts/build-cli.ps1 -Clean
+```
+
+The build output is:
+
+```text
+dist\juicer.exe
+```
+
+To build and copy to `%PROGRAMDATA%\Juicer`:
+
+```powershell
+pwsh -File scripts/build-cli.ps1 -Clean -Deploy
+```
+
+### Build the GUI executable
+
+To build a self-contained `juicer-gui.exe` desktop application:
+
+```powershell
+pwsh -File scripts/build-gui.ps1 -Clean
+```
+
+The build output is:
+
+```text
+dist\juicer-gui.exe
+```
+
+To build and copy to `%PROGRAMDATA%\Juicer`:
+
+```powershell
+pwsh -File scripts/build-gui.ps1 -Clean -Deploy
+```
+
+Both build scripts run `uv sync` with the appropriate extras and then invoke
+PyInstaller via `uv run` so that the build always uses the locked dependency
+versions from `uv.lock`.
 
 ### Manual service installation
 
@@ -748,26 +804,39 @@ protocol module has high test coverage and remains safe to refactor.
 ### Local development install
 
 ```bash
-python -m pip install -r requirements-dev.txt
+uv sync --group dev
 ```
 
-Or use the `uv`-based developer install shown earlier.
+Or use the convenience script:
+
+```bash
+./scripts/install-uv.sh --dev
+```
 
 ### Validation commands
 
 From the repository root:
 
 ```bash
-python -m ruff check src tests
-python -m mypy src
-python -m pytest
+uv run ruff check src tests
+uv run mypy src
+uv run pytest
 ```
 
 ### Running from source
 
 ```bash
-python -m juicer --help
-python -m juicer.gui
+uv run juicer --help
+uv run python -m juicer.gui
+```
+
+### Updating dependencies
+
+To add or update a dependency, edit `pyproject.toml` and re-lock:
+
+```bash
+uv lock
+uv sync
 ```
 
 ### Capturing raw Furman serial responses
@@ -775,7 +844,7 @@ python -m juicer.gui
 To collect real-device prompt characters and unparsed response bytes, run:
 
 ```bash
-python scripts/capture_furman_protocol.py --port COM3 --output furman-capture.txt --yes
+uv run python scripts/capture_furman_protocol.py --port COM3 --output furman-capture.txt --yes
 ```
 
 The capture script issues the full command set, including outlet switching and
@@ -812,7 +881,7 @@ tested on Linux or macOS.
 Install runtime dependencies:
 
 ```bash
-python -m pip install -r requirements.txt
+uv sync
 ```
 
 ### `PySide6 is required for the GUI`
@@ -820,7 +889,7 @@ python -m pip install -r requirements.txt
 Install the GUI extra:
 
 ```bash
-python -m pip install ".[gui]"
+uv sync --extra gui
 ```
 
 ### `pywin32 is required for service operations`
@@ -828,7 +897,7 @@ python -m pip install ".[gui]"
 Install the Windows extra on a Windows machine:
 
 ```bash
-python -m pip install ".[windows]"
+uv sync --extra windows
 ```
 
 ### The saved port does not auto-connect

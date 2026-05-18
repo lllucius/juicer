@@ -1,17 +1,15 @@
 param(
     [string]$TargetDir = "",
     [switch]$Clean,
-    [switch]$Deploy,
-    [switch]$Install,
-    [switch]$Start
+    [switch]$Deploy
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
-$SpecPath = Join-Path $PSScriptRoot "juicer_service.spec"
-$DistExe = Join-Path $RepoRoot "dist\juicer_service.exe"
+$SpecPath = Join-Path $PSScriptRoot "juicer_cli.spec"
+$DistExe = Join-Path $RepoRoot "dist\juicer.exe"
 
 if ([string]::IsNullOrWhiteSpace($TargetDir)) {
     if ($env:PROGRAMDATA) {
@@ -22,10 +20,10 @@ if ([string]::IsNullOrWhiteSpace($TargetDir)) {
     }
 }
 
-$TargetExe = Join-Path $TargetDir "juicer_service.exe"
+$TargetExe = Join-Path $TargetDir "juicer.exe"
 
-# Build from the repository root so the package extra (.[windows]) and
-# PyInstaller spec resolve paths consistently no matter where the script starts.
+# Build from the repository root so the package and PyInstaller spec resolve
+# paths consistently no matter where the script starts.
 Push-Location $RepoRoot
 try {
     if ($Clean) {
@@ -53,24 +51,10 @@ try {
 
     Write-Host "Built $DistExe"
 
-    if ($Deploy -or $Install -or $Start) {
+    if ($Deploy) {
         New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
         Copy-Item -Force $DistExe $TargetExe
         Write-Host "Deployed $TargetExe"
-    }
-
-    if ($Install) {
-        uv run juicer service install
-        if ($LASTEXITCODE -ne 0) {
-            throw "Service installation failed."
-        }
-    }
-
-    if ($Start) {
-        uv run juicer service start
-        if ($LASTEXITCODE -ne 0) {
-            throw "Service start failed."
-        }
     }
 }
 finally {

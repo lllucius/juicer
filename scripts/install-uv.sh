@@ -8,9 +8,9 @@ Usage: scripts/install-uv.sh [--dev] [--gui] [--windows] [--venv DIR]
 Create a uv-managed virtual environment and install Juicer into it.
 
 Options:
-  --dev        Install in editable mode with development dependencies
-  --gui        Include the GUI extra
-  --windows    Include the Windows extra
+  --dev        Install development dependencies (group: dev)
+  --gui        Include the GUI extra (PySide6)
+  --windows    Include the Windows extra (pywin32)
   --venv DIR   Virtual environment path (default: .venv)
   -h, --help   Show this help message
 USAGE
@@ -20,12 +20,13 @@ main() {
     local dev=0
     local venv_dir=.venv
     local extras=()
+    local groups=()
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --dev)
                 dev=1
-                extras+=(dev)
+                groups+=(dev)
                 ;;
             --gui)
                 extras+=(gui)
@@ -65,22 +66,22 @@ main() {
     repo_root=$(cd -- "$script_dir/.." && pwd)
     cd "$repo_root"
 
-    uv venv "$venv_dir"
-
-    local python_bin="$venv_dir/bin/python"
-    local package_spec=.
-    if [[ ${#extras[@]} -gt 0 ]]; then
-        local extra_list
-        extra_list=$(IFS=,; echo "${extras[*]}")
-        package_spec=".[$extra_list]"
+    # Build the uv sync argument list.
+    local sync_args=()
+    if [[ $dev -eq 0 ]]; then
+        sync_args+=(--no-group dev --no-group build)
+    fi
+    for extra in "${extras[@]+"${extras[@]}"}"; do
+        sync_args+=(--extra "$extra")
+    done
+    for group in "${groups[@]+"${groups[@]}"}"; do
+        sync_args+=(--group "$group")
+    done
+    if [[ -n "$venv_dir" && "$venv_dir" != ".venv" ]]; then
+        sync_args+=(--venv "$venv_dir")
     fi
 
-    local install_args=()
-    if [[ $dev -eq 1 ]]; then
-        install_args+=(-e)
-    fi
-
-    uv pip install --python "$python_bin" "${install_args[@]}" "$package_spec"
+    uv sync "${sync_args[@]+"${sync_args[@]}"}"
 
     cat <<DONE
 

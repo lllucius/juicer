@@ -109,23 +109,30 @@ if (-not $Uv) {
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $RepoRoot
 
-& $Uv venv $Venv
+# Build the uv sync argument list.
+$SyncArgs = @()
 
-$Extras = @()
-if ($Dev) { $Extras += "dev" }
-if ($Gui) { $Extras += "gui" }
-if ($Windows) { $Extras += "windows" }
-
-$PackageSpec = "."
-if ($Extras.Count -gt 0) {
-    $PackageSpec = ".[" + ($Extras -join ",") + "]"
+if (-not $Dev) {
+    $SyncArgs += "--no-group", "dev"
+    $SyncArgs += "--no-group", "build"
+}
+if ($Gui) {
+    $SyncArgs += "--extra", "gui"
+}
+if ($Windows) {
+    $SyncArgs += "--extra", "windows"
+}
+if ($Dev) {
+    $SyncArgs += "--group", "dev"
+}
+if ($Venv -ne ".venv") {
+    $SyncArgs += "--venv", $Venv
 }
 
-$InstallArgs = @()
-if ($Dev) { $InstallArgs += "-e" }
-
-$Python = Join-Path $Venv "Scripts\python.exe"
-& $Uv pip install --python $Python @InstallArgs $PackageSpec
+& $Uv sync @SyncArgs
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "uv sync failed."
+}
 
 Write-Host ""
 Write-Host "Juicer installed in $Venv."

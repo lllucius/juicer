@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=70", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "juicer"
@@ -38,11 +38,6 @@ gui = [
 windows = [
     "pywin32>=306",
 ]
-dev = [
-    "pytest>=8.0",
-    "ruff>=0.4",
-    "mypy>=1.10",
-]
 
 [project.scripts]
 juicer = "juicer.cli:main"
@@ -50,8 +45,20 @@ juicer = "juicer.cli:main"
 [project.gui-scripts]
 juicer-gui = "juicer.gui:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[dependency-groups]
+dev = [
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.4",
+]
+build = [
+    "pyinstaller>=6.0",
+    "pyinstaller-hooks-contrib>=2024.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/juicer"]
 
 [tool.ruff]
 src = ["src"]
