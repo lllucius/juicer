@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import ntpath
 import os
 import platform
 import site
@@ -183,7 +184,7 @@ def _service_python_class_string() -> str:
     keeps services installed from an unpacked source tree importable when the
     package has not been installed into site-packages.
     """
-    return f"{_service_package_parent()}\\{__name__}.JuicerService"
+    return ntpath.join(_service_package_parent(), f"{__name__}.JuicerService")
 
 
 @contextmanager
