@@ -109,8 +109,7 @@ exe = EXE(
     upx=False,          # Keep UPX off; some AV software rejects UPX-packed service exes
     upx_exclude=[],
     runtime_tmpdir=None,
-    # console=True  →  console subsystem  (same as pythonservice.exe; lets early
-    #                   crash output reach Windows Error Reporting)
+    # console=True keeps early crash output visible to Windows Error Reporting.
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,

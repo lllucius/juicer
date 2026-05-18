@@ -28,9 +28,11 @@ $TargetExe = Join-Path $TargetDir "juicer_service.exe"
 Push-Location $RepoRoot
 try {
     if ($Clean) {
-        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue `
-            (Join-Path $RepoRoot "build"), `
+        $cleanPaths = @(
+            (Join-Path $RepoRoot "build"),
             (Join-Path $RepoRoot "dist")
+        )
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -Path $cleanPaths
     }
 
     & $Python -m pip install --upgrade ".[windows]" pyinstaller pyinstaller-hooks-contrib
