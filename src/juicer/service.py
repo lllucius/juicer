@@ -224,7 +224,8 @@ def _service_log_path(name: str) -> Path:
 
         config_path = TomlStore().path
         return config_path.with_name(f"{name}.log")
-    except (ImportError, OSError, RuntimeError, ValueError):
+    except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        logger.debug("Falling back to default service log directory: %s", exc)
         return _default_service_log_dir() / f"{name}.log"
 
 
@@ -673,10 +674,11 @@ def _run_elevated_command_with_logging(command: str, log_path: str | None) -> in
         _run_service_command_without_elevation(command)
         return 0
     except SystemExit as exc:
-        code = exc.code if isinstance(exc.code, int) else 1
-        if exc.code is not None and not isinstance(exc.code, int):
+        if isinstance(exc.code, int):
+            return exc.code
+        if exc.code is not None:
             emit(str(exc.code))
-        return code
+        return 1
     except Exception:
         emit(f"Elevated service {command} raised an exception:")
         emit(traceback.format_exc().rstrip())

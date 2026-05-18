@@ -203,6 +203,23 @@ def test_service_boot_and_shutdown_logs_are_written_next_to_config(
     assert "shutdown sequence detail" in (tmp_path / "shutdown.log").read_text(encoding="utf-8")
 
 
+def test_svc_do_run_warns_when_service_log_cannot_be_opened(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service_module = _import_service_with_fake_pywin32()
+    warnings: list[str] = []
+
+    service_module._run_boot_sequence = lambda **kwargs: None
+    service_module._run_shutdown_sequence = lambda: None
+    monkeypatch.setattr(service_module, "_install_service_log_handler", lambda name: None)
+    monkeypatch.setattr(service_module.servicemanager, "LogWarningMsg", warnings.append)
+
+    service = service_module.JuicerService([])
+    service.SvcDoRun()
+
+    assert warnings == ["Juicer: Unable to open service.log for writing"]
+
+
 def test_cli_can_run_directly_from_source_directory() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     cli_dir = repo_root / "src" / "juicer"

@@ -25,6 +25,8 @@ if ([string]::IsNullOrWhiteSpace($TargetDir)) {
 
 $TargetExe = Join-Path $TargetDir "juicer_service.exe"
 
+# Build from the repository root so the package extra (.[windows]) and
+# PyInstaller spec resolve paths consistently no matter where the script starts.
 Push-Location $RepoRoot
 try {
     if ($Clean) {
