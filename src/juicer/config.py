@@ -45,6 +45,8 @@ class SequenceConfig(BaseModel):
 
     model_config = ConfigDict(validate_assignment=True)
 
+    event_start_sound: str = ""
+    event_stop_sound: str = ""
     bank1: BankConfig = Field(default_factory=BankConfig)
     bank2: BankConfig = Field(default_factory=BankConfig)
     bank3: BankConfig = Field(default_factory=BankConfig)
@@ -69,8 +71,6 @@ class GlobalConfig(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
 
     port: str = Field(default="COM3", min_length=1, description="Serial port name")
-    event_start_sound: str = ""
-    event_stop_sound: str = ""
     boot: SequenceConfig = Field(default_factory=SequenceConfig)
     shutdown: SequenceConfig = Field(default_factory=SequenceConfig)
 
@@ -182,10 +182,13 @@ def _bank_to_toml(name: str, cfg: BankConfig) -> list[str]:
 
 def _sequence_to_toml(name: str, seq: SequenceConfig) -> list[str]:
     """Serialize all bank sections for one named sequence."""
-    lines: list[str] = []
+    lines: list[str] = [
+        f"[{name}]",
+        f"event_start_sound = {_format_toml_value(seq.event_start_sound)}",
+        f"event_stop_sound = {_format_toml_value(seq.event_stop_sound)}",
+    ]
     for bank in range(1, NUM_BANKS + 1):
-        if lines:
-            lines.append("")
+        lines.append("")
         lines.extend(_bank_to_toml(f"{name}.bank{bank}", seq.bank(bank)))
     return lines
 
@@ -194,8 +197,6 @@ def dump_config_toml(config: GlobalConfig) -> str:
     """Serialize a validated configuration model into Juicer's TOML layout."""
     lines = [
         f"port = {_format_toml_value(config.port)}",
-        f"event_start_sound = {_format_toml_value(config.event_start_sound)}",
-        f"event_stop_sound = {_format_toml_value(config.event_stop_sound)}",
         "",
     ]
     lines.extend(_sequence_to_toml("boot", config.boot))

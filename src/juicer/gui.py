@@ -467,7 +467,7 @@ if _PYSIDE6_AVAILABLE:
         """Shared editor for boot or shutdown sequence configuration."""
 
         def __init__(
-            self, label: str, sound_label: str, parent: Optional[QWidget] = None
+            self, label: str, parent: Optional[QWidget] = None
         ) -> None:
             """Build shared sound and bank-delay editors for one named sequence."""
             super().__init__(parent)
@@ -475,17 +475,36 @@ if _PYSIDE6_AVAILABLE:
             layout = QVBoxLayout(self)
 
             # Sound file section
-            sound_group = QGroupBox(f"{sound_label}")
-            sound_group.setAccessibleName(f"{sound_label} Configuration")
+            sound_group = QGroupBox("Sounds")
+            sound_group.setAccessibleName(f"{label} Sounds Configuration")
             sound_form = QFormLayout(sound_group)
-            self.edit_sound = QLineEdit()
-            self.edit_sound.setAccessibleName(f"{sound_label} Path")
+
+            self.edit_start_sound = QLineEdit()
+            self.edit_start_sound.setAccessibleName(f"{label} Event Start Sound Path")
             _set_help(
-                self.edit_sound,
-                f"Path to the WAV file to play for the {sound_label.lower()}.",
+                self.edit_start_sound,
+                f"Path to the WAV file to play before the {label.lower()} sequence starts.",
             )
-            sound_browse_row = self._path_row(self.edit_sound, f"Browse {sound_label}")
-            sound_form.addRow(_label(f"{sound_label} Path:", self.edit_sound), sound_browse_row)
+            start_sound_row = self._path_row(
+                self.edit_start_sound, f"Browse {label} Event Start Sound"
+            )
+            sound_form.addRow(
+                _label("Event Start Sound Path:", self.edit_start_sound), start_sound_row
+            )
+
+            self.edit_stop_sound = QLineEdit()
+            self.edit_stop_sound.setAccessibleName(f"{label} Event Stop Sound Path")
+            _set_help(
+                self.edit_stop_sound,
+                f"Path to the WAV file to play after the {label.lower()} sequence completes.",
+            )
+            stop_sound_row = self._path_row(
+                self.edit_stop_sound, f"Browse {label} Event Stop Sound"
+            )
+            sound_form.addRow(
+                _label("Event Stop Sound Path:", self.edit_stop_sound), stop_sound_row
+            )
+
             layout.addWidget(sound_group)
 
             self.bank_widgets: dict[int, dict[str, Any]] = {}
@@ -556,17 +575,12 @@ if _PYSIDE6_AVAILABLE:
             if path:
                 edit.setText(path)
 
-        def get_sound(self) -> str:
-            """Return the trimmed sound path currently shown in the editor."""
-            return str(self.edit_sound.text()).strip()
-
-        def set_sound(self, sound: str) -> None:
-            """Populate the sound-path field from configuration data."""
-            self.edit_sound.setText(sound)
-
         def get_sequence_config(self) -> SequenceConfig:
             """Read current widget values into a SequenceConfig."""
-            seq = SequenceConfig()
+            seq = SequenceConfig(
+                event_start_sound=str(self.edit_start_sound.text()).strip(),
+                event_stop_sound=str(self.edit_stop_sound.text()).strip(),
+            )
             for i in range(1, 5):
                 w = self.bank_widgets[i]
                 action_data = w["action"].currentData()
@@ -584,6 +598,8 @@ if _PYSIDE6_AVAILABLE:
 
         def set_sequence_config(self, seq: SequenceConfig) -> None:
             """Populate widgets from a SequenceConfig."""
+            self.edit_start_sound.setText(seq.event_start_sound)
+            self.edit_stop_sound.setText(seq.event_stop_sound)
             for i in range(1, 5):
                 w = self.bank_widgets[i]
                 bank_cfg = seq.bank(i)
@@ -601,14 +617,14 @@ if _PYSIDE6_AVAILABLE:
 
         def __init__(self, parent: Optional[QWidget] = None) -> None:
             """Configure the shared editor with boot-sequence labels."""
-            super().__init__("Boot", "Event Start Sound", parent)
+            super().__init__("Boot", parent)
 
     class ShutdownSequenceEditor(_SequenceEditorPanel):
         """Editor for the shutdown sequence (banks 4→1)."""
 
         def __init__(self, parent: Optional[QWidget] = None) -> None:
             """Configure the shared editor with shutdown-sequence labels."""
-            super().__init__("Shutdown", "Event End Sound", parent)
+            super().__init__("Shutdown", parent)
 
     class ServicePanel(QWidget):
         """Windows service management controls."""
@@ -1232,8 +1248,6 @@ if _PYSIDE6_AVAILABLE:
             self._config = config
             if config.port:
                 self.serial_settings.set_current_port(config.port)
-            self.boot_editor.set_sound(config.event_start_sound)
-            self.shutdown_editor.set_sound(config.event_stop_sound)
             self.boot_editor.set_sequence_config(config.boot)
             self.shutdown_editor.set_sequence_config(config.shutdown)
             self.import_export.set_config(config)
@@ -1242,8 +1256,6 @@ if _PYSIDE6_AVAILABLE:
             """Build and validate config from current editor widgets."""
             return GlobalConfig(
                 port=self.serial_settings.current_port(),
-                event_start_sound=self.boot_editor.get_sound(),
-                event_stop_sound=self.shutdown_editor.get_sound(),
                 boot=self.boot_editor.get_sequence_config(),
                 shutdown=self.shutdown_editor.get_sequence_config(),
             )
