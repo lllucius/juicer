@@ -16,6 +16,7 @@ import platform
 import subprocess
 import sys
 import tempfile
+import threading
 import traceback
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -343,6 +344,108 @@ def _run_shutdown_sequence() -> None:
             transport.close()
 
 
+# ── Shutdown control-handler helpers ──────────────────────────────────
+#
+# Windows imposes very different deadlines on the three "stop" paths:
+#
+# * ``SERVICE_CONTROL_STOP`` — no hard SCM timeout for manual stops; the
+#   service may keep reporting ``STOP_PENDING`` with a ``waitHint`` as
+#   long as needed.
+# * ``SERVICE_CONTROL_SHUTDOWN`` — bounded by
+#   ``HKLM\SYSTEM\CurrentControlSet\Control\WaitToKillServiceTimeout``,
+#   typically only **5 seconds** on modern Windows.  Far too short for
+#   the Furman serial dialogue.
+# * ``SERVICE_CONTROL_PRESHUTDOWN`` — opt-in via
+#   ``SERVICE_ACCEPT_PRESHUTDOWN``; bounded by ``PreshutdownTimeout``
+#   which defaults to **180 seconds** and is configurable per service.
+#
+# The helpers below let the control-handler thread spawn the actual
+# shutdown work on a worker thread while it keeps the SCM informed with
+# periodic ``STOP_PENDING`` reports.  Critically, the ``shutdown.log``
+# file handler is installed *before* the worker starts so that even if
+# the process is force-terminated mid-sequence there is a log record
+# explaining that shutdown was attempted.
+
+# ``SERVICE_CONTROL_PRESHUTDOWN`` (15) and ``SERVICE_ACCEPT_PRESHUTDOWN``
+# (0x100) are defined by Windows but are not always exposed as
+# attributes by older pywin32 builds.  Provide constant fallbacks so the
+# code keeps working everywhere.
+SERVICE_CONTROL_PRESHUTDOWN = 0x0000000F
+SERVICE_ACCEPT_PRESHUTDOWN = 0x00000100
+
+# How often the control handler reports ``STOP_PENDING`` to the SCM
+# while the worker thread runs.  ``waitHint`` must be at least as large
+# as the interval between updates; we use 10 s with a 5 s join timeout
+# to give the SCM a comfortable margin.
+SHUTDOWN_STATUS_INTERVAL_SEC = 5.0
+SHUTDOWN_STATUS_WAIT_HINT_MS = 10000
+
+
+def _run_shutdown_with_status_reporting(
+    service: Any,
+    *,
+    report_status: Callable[[int, int], None] | None = None,
+) -> None:
+    """Run the shutdown sequence on a worker thread.
+
+    A root-logger ``shutdown.log`` handler is installed immediately so a
+    record exists even if the process is force-terminated before the
+    sequence completes.  While the worker runs, the caller's
+    ``ReportServiceStatus`` is invoked periodically so the SCM keeps
+    waiting instead of killing the service after the default 5 s
+    ``WaitToKillServiceTimeout``.
+
+    Any exception from the worker is re-raised on the caller thread
+    after the worker terminates.
+    """
+    if report_status is None:
+        def report_status(status: int, wait_hint: int) -> None:
+            service.ReportServiceStatus(status, waitHint=wait_hint)
+
+    # Install the shutdown log handler eagerly so we always leave a
+    # breadcrumb on disk, even if the worker is killed mid-sequence.
+    installed = _install_service_log_handler("shutdown")
+    handler = installed[0] if installed is not None else None
+    log_path = installed[1] if installed is not None else None
+    if log_path is not None:
+        logger.info("Shutdown control received; log file: %s", log_path)
+    else:
+        logger.warning("Shutdown control received but shutdown.log could not be opened")
+
+    error_holder: list[BaseException] = []
+
+    def _worker() -> None:
+        try:
+            _run_shutdown_sequence()
+        except BaseException as exc:  # pragma: no cover - re-raised below
+            error_holder.append(exc)
+
+    thread = threading.Thread(
+        target=_worker, name="juicer-shutdown-worker", daemon=True
+    )
+    try:
+        # Initial status update so the SCM sees the longer wait hint
+        # before the worker starts doing slow work.
+        report_status(
+            win32service.SERVICE_STOP_PENDING, SHUTDOWN_STATUS_WAIT_HINT_MS
+        )
+        thread.start()
+        # Poll loop: keep the SCM informed until the worker exits.
+        while True:
+            thread.join(timeout=SHUTDOWN_STATUS_INTERVAL_SEC)
+            if not thread.is_alive():
+                break
+            report_status(
+                win32service.SERVICE_STOP_PENDING, SHUTDOWN_STATUS_WAIT_HINT_MS
+            )
+    finally:
+        if handler is not None:
+            _remove_service_log_handler(handler)
+
+    if error_holder:
+        raise error_holder[0]
+
+
 # ── Conditional class definition to allow import on any OS ────────────
 
 if _PYWIN32_AVAILABLE:
@@ -424,13 +527,14 @@ if _PYWIN32_AVAILABLE:
                     # Block until stop event is signalled
                     win32event.WaitForSingleObject(self.stop_event, win32event.INFINITE)
 
-                    # Run shutdown sequence after stop event unless SvcShutdown already did it.
+                    # Run shutdown sequence after stop event unless a
+                    # preshutdown/shutdown control handler already did it.
                     if not self._shutdown_done:
                         servicemanager.LogInfoMsg(
                             f"{SERVICE_NAME}: Running shutdown sequence"
                         )
                         try:
-                            _run_shutdown_sequence()
+                            _run_shutdown_with_status_reporting(self)
                         except Exception:
                             servicemanager.LogErrorMsg(
                                 f"{SERVICE_NAME}: Shutdown failed: {traceback.format_exc()}"
@@ -463,23 +567,87 @@ if _PYWIN32_AVAILABLE:
             servicemanager.LogInfoMsg(f"{SERVICE_NAME}: Stop requested")
             win32event.SetEvent(self.stop_event)
 
-        def SvcShutdown(self) -> None:
-            """Handle SERVICE_CONTROL_SHUTDOWN — run shutdown directly.
+        def GetAcceptedControls(self) -> int:
+            """Accept ``SERVICE_CONTROL_PRESHUTDOWN`` in addition to the defaults.
 
-            On system shutdown there is limited time, so we run powerdown()
-            directly in the handler (matching C++ behaviour).
+            ``SERVICE_CONTROL_SHUTDOWN`` is bounded by
+            ``WaitToKillServiceTimeout`` (typically 5 s on modern
+            Windows), which is far too short to complete the Furman
+            shutdown dialogue.  ``SERVICE_CONTROL_PRESHUTDOWN`` runs
+            earlier in the system shutdown sequence and is bounded by
+            ``PreshutdownTimeout`` (default 180 s), giving the
+            shutdown.log file time to be created and the UPS commands
+            time to complete.
             """
-            self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING, waitHint=60000)
-            servicemanager.LogInfoMsg(f"{SERVICE_NAME}: System shutdown — running shutdown now")
+            base = cast(int, super().GetAcceptedControls())
+            accept_pre = getattr(
+                win32service, "SERVICE_ACCEPT_PRESHUTDOWN", SERVICE_ACCEPT_PRESHUTDOWN
+            )
+            return base | accept_pre
+
+        def SvcOtherEx(self, control: int, event_type: int, data: object) -> None:
+            """Dispatch ``SERVICE_CONTROL_PRESHUTDOWN`` (and fall back otherwise)."""
+            preshutdown = getattr(
+                win32service,
+                "SERVICE_CONTROL_PRESHUTDOWN",
+                SERVICE_CONTROL_PRESHUTDOWN,
+            )
+            if control == preshutdown:
+                self._handle_preshutdown()
+                return
+            super().SvcOtherEx(control, event_type, data)
+
+        def _handle_preshutdown(self) -> None:
+            """Run the shutdown sequence during the preshutdown phase.
+
+            This is invoked by the SCM before any ``SERVICE_CONTROL_STOP``
+            or ``SERVICE_CONTROL_SHUTDOWN`` is dispatched and operates
+            under the much longer ``PreshutdownTimeout``.  Work happens
+            on a worker thread while this handler keeps the SCM informed
+            via periodic ``STOP_PENDING`` reports.
+            """
+            self.ReportServiceStatus(
+                win32service.SERVICE_STOP_PENDING,
+                waitHint=SHUTDOWN_STATUS_WAIT_HINT_MS,
+            )
+            servicemanager.LogInfoMsg(
+                f"{SERVICE_NAME}: Preshutdown — running shutdown now"
+            )
             self._shutdown_done = True
             try:
-                _run_shutdown_sequence()
+                _run_shutdown_with_status_reporting(self)
             except Exception:
                 servicemanager.LogErrorMsg(
                     f"{SERVICE_NAME}: Shutdown failed: {traceback.format_exc()}"
                 )
             finally:
                 win32event.SetEvent(self.stop_event)
+
+        def SvcShutdown(self) -> None:
+            """Handle ``SERVICE_CONTROL_SHUTDOWN`` — fallback path.
+
+            ``_handle_preshutdown`` normally runs first (because we opt
+            into ``SERVICE_ACCEPT_PRESHUTDOWN``) and sets
+            ``_shutdown_done``, so this handler typically just signals
+            the stop event.  When preshutdown was missed for any reason
+            (e.g. service started during shutdown), fall back to running
+            the sequence here under the much shorter system-shutdown
+            timeout while still reporting status to the SCM.
+            """
+            self.ReportServiceStatus(
+                win32service.SERVICE_STOP_PENDING,
+                waitHint=SHUTDOWN_STATUS_WAIT_HINT_MS,
+            )
+            servicemanager.LogInfoMsg(f"{SERVICE_NAME}: System shutdown received")
+            if not self._shutdown_done:
+                self._shutdown_done = True
+                try:
+                    _run_shutdown_with_status_reporting(self)
+                except Exception:
+                    servicemanager.LogErrorMsg(
+                        f"{SERVICE_NAME}: Shutdown failed: {traceback.format_exc()}"
+                    )
+            win32event.SetEvent(self.stop_event)
 
 else:
 

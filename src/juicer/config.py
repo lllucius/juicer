@@ -45,8 +45,6 @@ class SequenceConfig(BaseModel):
 
     model_config = ConfigDict(validate_assignment=True)
 
-    event_start_sound: str = ""
-    event_stop_sound: str = ""
     bank1: BankConfig = Field(default_factory=BankConfig)
     bank2: BankConfig = Field(default_factory=BankConfig)
     bank3: BankConfig = Field(default_factory=BankConfig)
@@ -184,8 +182,6 @@ def _sequence_to_toml(name: str, seq: SequenceConfig) -> list[str]:
     """Serialize all bank sections for one named sequence."""
     lines: list[str] = [
         f"[{name}]",
-        f"event_start_sound = {_format_toml_value(seq.event_start_sound)}",
-        f"event_stop_sound = {_format_toml_value(seq.event_stop_sound)}",
     ]
     for bank in range(1, NUM_BANKS + 1):
         lines.append("")

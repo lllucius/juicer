@@ -5,13 +5,11 @@ Replicates the C++ ``powercycle()`` logic:
   - Shutdown order: banks 4, 3, 2, 1
   - Per bank: pre-delay → action → post-delay
   - Skip banks with no action configured
-  - Optional sound at start/end of sequence
 """
 
 from __future__ import annotations
 
 import logging
-import platform
 import time
 from typing import Callable, Protocol
 
@@ -47,27 +45,6 @@ class CancelToken(Protocol):
     def is_set(self) -> bool:
         """Report whether the caller has requested the active sequence to stop."""
         ...
-
-
-# ──────────────────────────────────────────────────────────────────────
-# Sound helper
-# ──────────────────────────────────────────────────────────────────────
-
-
-def _play_sound(path: str) -> None:
-    """Play a WAV file.  Windows: ``PlaySound``.  Others: log a warning."""
-    if not path:
-        return
-    if platform.system() == "Windows":
-        try:
-            import winsound
-
-            winsound.PlaySound(path, winsound.SND_FILENAME)
-            logger.info("Played sound: %s", path)
-        except Exception as exc:
-            logger.warning("Failed to play sound %s: %s", path, exc)
-    else:
-        logger.info("Sound playback skipped (not Windows): %s", path)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -108,8 +85,6 @@ def run_sequence(
     bank_order: list[int],
     client: SwitchClient,
     *,
-    event_start_sound: str = "",
-    event_stop_sound: str = "",
     sleeper: Sleeper = time.sleep,
     cancel: CancelToken | None = None,
     progress_callback: ProgressCallback | None = None,
@@ -120,19 +95,11 @@ def run_sequence(
         seq: Per-bank configuration (actions and delays).
         bank_order: Order in which to process banks (e.g. ``[1,2,3,4]``).
         client: Protocol client with a ``switch(bank, state)`` method.
-        event_start_sound: WAV file path to play before the first bank action.
-        event_stop_sound: WAV file path to play after the last bank action.
         sleeper: Callable for delays (injected for testing).
         cancel: Optional event-like object; if set, the sequence exits before the next step.
         progress_callback: Optional callback invoked during long-running startup work.
     """
     logger.info("Starting sequence, bank order: %s", bank_order)
-
-    # Play start sound
-    if event_start_sound:
-        _report_progress(progress_callback)
-        _play_sound(event_start_sound)
-        _report_progress(progress_callback)
 
     for bank_num in bank_order:
         if cancel is not None and cancel.is_set():
@@ -165,7 +132,6 @@ def run_sequence(
             _report_progress(progress_callback)
         except Exception as exc:
             logger.error("Bank %d: action failed: %s", bank_num, exc)
-            # Do not play event_stop_sound here; callers own error cleanup.
             raise
 
         # Post-delay
@@ -177,12 +143,6 @@ def run_sequence(
             if cancel is not None and cancel.is_set():
                 logger.info("Sequence cancelled after post-delay")
                 return
-
-    # Play stop sound
-    if event_stop_sound:
-        _report_progress(progress_callback)
-        _play_sound(event_stop_sound)
-        _report_progress(progress_callback)
 
     logger.info("Sequence complete")
 
@@ -200,8 +160,6 @@ def run_boot(
         config.boot,
         BOOT_ORDER,
         client,
-        event_start_sound=config.boot.event_start_sound,
-        event_stop_sound=config.boot.event_stop_sound,
         sleeper=sleeper,
         cancel=cancel,
         progress_callback=progress_callback,
@@ -221,8 +179,6 @@ def run_shutdown(
         config.shutdown,
         SHUTDOWN_ORDER,
         client,
-        event_start_sound=config.shutdown.event_start_sound,
-        event_stop_sound=config.shutdown.event_stop_sound,
         sleeper=sleeper,
         cancel=cancel,
         progress_callback=progress_callback,

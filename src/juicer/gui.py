@@ -55,7 +55,6 @@ try:
         QGroupBox,
         QHBoxLayout,
         QLabel,
-        QLineEdit,
         QMainWindow,
         QMessageBox,
         QPushButton,
@@ -469,43 +468,10 @@ if _PYSIDE6_AVAILABLE:
         def __init__(
             self, label: str, parent: Optional[QWidget] = None
         ) -> None:
-            """Build shared sound and bank-delay editors for one named sequence."""
+            """Build shared bank-delay editors for one named sequence."""
             super().__init__(parent)
             self._label = label
             layout = QVBoxLayout(self)
-
-            # Sound file section
-            sound_group = QGroupBox("Sounds")
-            sound_group.setAccessibleName(f"{label} Sounds Configuration")
-            sound_form = QFormLayout(sound_group)
-
-            self.edit_start_sound = QLineEdit()
-            self.edit_start_sound.setAccessibleName(f"{label} Event Start Sound Path")
-            _set_help(
-                self.edit_start_sound,
-                f"Path to the WAV file to play before the {label.lower()} sequence starts.",
-            )
-            start_sound_row = self._path_row(
-                self.edit_start_sound, f"Browse {label} Event Start Sound"
-            )
-            sound_form.addRow(
-                _label("Event Start Sound Path:", self.edit_start_sound), start_sound_row
-            )
-
-            self.edit_stop_sound = QLineEdit()
-            self.edit_stop_sound.setAccessibleName(f"{label} Event Stop Sound Path")
-            _set_help(
-                self.edit_stop_sound,
-                f"Path to the WAV file to play after the {label.lower()} sequence completes.",
-            )
-            stop_sound_row = self._path_row(
-                self.edit_stop_sound, f"Browse {label} Event Stop Sound"
-            )
-            sound_form.addRow(
-                _label("Event Stop Sound Path:", self.edit_stop_sound), stop_sound_row
-            )
-
-            layout.addWidget(sound_group)
 
             self.bank_widgets: dict[int, dict[str, Any]] = {}
 
@@ -553,34 +519,9 @@ if _PYSIDE6_AVAILABLE:
 
             layout.addStretch()
 
-        def _path_row(self, edit: QLineEdit, accessible_name: str) -> QWidget:
-            """Create a file-path row with an attached browse button."""
-            row = QWidget()
-            row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.addWidget(edit)
-
-            btn_browse = QPushButton("Browse…")
-            btn_browse.setAccessibleName(accessible_name)
-            _set_help(btn_browse, "Browse for a WAV sound file.")
-            btn_browse.clicked.connect(lambda: self._browse_sound(edit))
-            row_layout.addWidget(btn_browse)
-            return row
-
-        def _browse_sound(self, edit: QLineEdit) -> None:
-            """Prompt for a WAV file and copy the chosen path into the target field."""
-            path, _ = QFileDialog.getOpenFileName(
-                self, "Select Sound File", "", "WAV Files (*.wav);;All Files (*)"
-            )
-            if path:
-                edit.setText(path)
-
         def get_sequence_config(self) -> SequenceConfig:
             """Read current widget values into a SequenceConfig."""
-            seq = SequenceConfig(
-                event_start_sound=str(self.edit_start_sound.text()).strip(),
-                event_stop_sound=str(self.edit_stop_sound.text()).strip(),
-            )
+            seq = SequenceConfig()
             for i in range(1, 5):
                 w = self.bank_widgets[i]
                 action_data = w["action"].currentData()
@@ -598,8 +539,6 @@ if _PYSIDE6_AVAILABLE:
 
         def set_sequence_config(self, seq: SequenceConfig) -> None:
             """Populate widgets from a SequenceConfig."""
-            self.edit_start_sound.setText(seq.event_start_sound)
-            self.edit_stop_sound.setText(seq.event_stop_sound)
             for i in range(1, 5):
                 w = self.bank_widgets[i]
                 bank_cfg = seq.bank(i)
