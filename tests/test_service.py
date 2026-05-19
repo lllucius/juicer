@@ -283,10 +283,11 @@ def test_svc_other_ex_falls_back_for_unknown_controls() -> None:
     service_module = _import_service_with_fake_pywin32()
     service = service_module.JuicerService([])
 
+    def must_not_run() -> None:
+        raise AssertionError("shutdown must not run for unrelated controls")
+
     # Unknown control codes must not invoke the shutdown handler.
-    service_module._run_shutdown_sequence = lambda: (_ for _ in ()).throw(
-        AssertionError("shutdown must not run for unrelated controls")
-    )
+    service_module._run_shutdown_sequence = must_not_run
     service.SvcOtherEx(0xDEAD, 0, None)
     assert service._shutdown_done is False
 
