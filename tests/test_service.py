@@ -21,6 +21,17 @@ def _import_service_with_fake_pywin32() -> types.ModuleType:
         def ReportServiceStatus(self, status: int, waitHint: int | None = None) -> None:
             self.statuses.append((status, waitHint))
 
+        def GetAcceptedControls(self) -> int:
+            # Match pywin32's default: STOP plus SHUTDOWN when SvcShutdown exists.
+            accepted = 0x00000001  # SERVICE_ACCEPT_STOP
+            if hasattr(self, "SvcShutdown"):
+                accepted |= 0x00000004  # SERVICE_ACCEPT_SHUTDOWN
+            return accepted
+
+        def SvcOtherEx(self, control: int, event_type: int, data: object) -> None:
+            # Default: ignore unknown controls (matches pywin32's SvcOther fallback).
+            pass
+
     servicemanager = types.SimpleNamespace(
         LogInfoMsg=lambda message: None,
         LogErrorMsg=lambda message: None,
@@ -41,6 +52,8 @@ def _import_service_with_fake_pywin32() -> types.ModuleType:
         SERVICE_PAUSE_PENDING=6,
         SERVICE_PAUSED=7,
         SERVICE_AUTO_START=2,
+        SERVICE_CONTROL_PRESHUTDOWN=15,
+        SERVICE_ACCEPT_PRESHUTDOWN=0x100,
     )
     win32serviceutil = types.SimpleNamespace(
         ServiceFramework=ServiceFramework,
@@ -218,6 +231,156 @@ def test_svc_do_run_warns_when_service_log_cannot_be_opened(
     service.SvcDoRun()
 
     assert warnings == ["Juicer: Unable to open service.log for writing"]
+
+
+def test_service_accepts_preshutdown_control() -> None:
+    service_module = _import_service_with_fake_pywin32()
+    service = service_module.JuicerService([])
+
+    accepted = service.GetAcceptedControls()
+
+    # PRESHUTDOWN must be advertised in addition to the framework defaults
+    # (STOP + SHUTDOWN) so the SCM sends SERVICE_CONTROL_PRESHUTDOWN and
+    # honours the longer PreshutdownTimeout instead of killing the service
+    # after WaitToKillServiceTimeout (5 s by default).
+    assert accepted & service_module.win32service.SERVICE_ACCEPT_PRESHUTDOWN
+    assert accepted & 0x00000001  # STOP — framework default
+    assert accepted & 0x00000004  # SHUTDOWN — framework default
+
+
+def test_preshutdown_runs_shutdown_sequence_with_status_reporting() -> None:
+    service_module = _import_service_with_fake_pywin32()
+    win32service = service_module.win32service
+
+    calls: list[str] = []
+    set_event_calls: list[object] = []
+    service_module.win32event.SetEvent = set_event_calls.append  # type: ignore[assignment]
+
+    def fake_shutdown() -> None:
+        calls.append("shutdown")
+
+    service_module._run_shutdown_sequence = fake_shutdown
+
+    service = service_module.JuicerService([])
+    service.SvcOtherEx(win32service.SERVICE_CONTROL_PRESHUTDOWN, 0, None)
+
+    assert calls == ["shutdown"]
+    assert service._shutdown_done is True
+    # The control handler reports STOP_PENDING at least once with a non-zero
+    # waitHint so the SCM keeps waiting under PreshutdownTimeout.
+    stop_pending = [
+        (status, hint)
+        for status, hint in service.statuses
+        if status == win32service.SERVICE_STOP_PENDING
+    ]
+    assert stop_pending, service.statuses
+    assert all(hint and hint > 0 for _, hint in stop_pending)
+    # The stop event is signalled so SvcDoRun wakes up and finishes.
+    assert set_event_calls, "stop event must be signalled after preshutdown"
+
+
+def test_svc_other_ex_falls_back_for_unknown_controls() -> None:
+    service_module = _import_service_with_fake_pywin32()
+    service = service_module.JuicerService([])
+
+    # Unknown control codes must not invoke the shutdown handler.
+    service_module._run_shutdown_sequence = lambda: (_ for _ in ()).throw(
+        AssertionError("shutdown must not run for unrelated controls")
+    )
+    service.SvcOtherEx(0xDEAD, 0, None)
+    assert service._shutdown_done is False
+
+
+def test_shutdown_with_status_reporting_keeps_reporting_during_slow_work() -> None:
+    import threading as _threading
+
+    service_module = _import_service_with_fake_pywin32()
+    win32service = service_module.win32service
+
+    started = _threading.Event()
+    finish = _threading.Event()
+
+    def slow_shutdown() -> None:
+        started.set()
+        # Block long enough that the poll loop must report STOP_PENDING
+        # at least twice before the worker finishes.
+        assert finish.wait(timeout=5.0)
+
+    service_module._run_shutdown_sequence = slow_shutdown
+    # Use a short interval so the test stays fast.
+    service_module.SHUTDOWN_STATUS_INTERVAL_SEC = 0.05
+
+    service = service_module.JuicerService([])
+
+    def driver() -> None:
+        service_module._run_shutdown_with_status_reporting(service)
+
+    thread = _threading.Thread(target=driver)
+    thread.start()
+    try:
+        assert started.wait(timeout=2.0)
+        # Give the poll loop a chance to emit multiple status reports.
+        import time
+
+        time.sleep(0.25)
+    finally:
+        finish.set()
+        thread.join(timeout=5.0)
+    assert not thread.is_alive()
+
+    stop_pending = [
+        hint
+        for status, hint in service.statuses
+        if status == win32service.SERVICE_STOP_PENDING
+    ]
+    # One initial report + at least one polling-loop report.
+    assert len(stop_pending) >= 2, service.statuses
+
+
+def test_shutdown_with_status_reporting_creates_log_file_eagerly(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """shutdown.log must exist on disk before the worker starts so a
+    record survives even if the process is force-terminated mid-sequence.
+    """
+    service_module = _import_service_with_fake_pywin32()
+
+    monkeypatch.setattr(
+        service_module, "_service_log_path", lambda name: tmp_path / f"{name}.log"
+    )
+
+    log_file_existed_when_worker_started: list[bool] = []
+
+    def fake_shutdown() -> None:
+        log_file_existed_when_worker_started.append(
+            (tmp_path / "shutdown.log").is_file()
+        )
+
+    service_module._run_shutdown_sequence = fake_shutdown
+    service_module.SHUTDOWN_STATUS_INTERVAL_SEC = 0.01
+
+    service = service_module.JuicerService([])
+    service_module._run_shutdown_with_status_reporting(service)
+
+    assert log_file_existed_when_worker_started == [True]
+    # The eagerly installed handler logs a "Shutdown control received" line.
+    contents = (tmp_path / "shutdown.log").read_text(encoding="utf-8")
+    assert "Shutdown control received" in contents
+
+
+def test_shutdown_with_status_reporting_reraises_worker_exception() -> None:
+    service_module = _import_service_with_fake_pywin32()
+
+    def failing_shutdown() -> None:
+        raise RuntimeError("boom")
+
+    service_module._run_shutdown_sequence = failing_shutdown
+    service_module.SHUTDOWN_STATUS_INTERVAL_SEC = 0.01
+
+    service = service_module.JuicerService([])
+    with pytest.raises(RuntimeError, match="boom"):
+        service_module._run_shutdown_with_status_reporting(service)
 
 
 def test_cli_can_run_directly_from_source_directory() -> None:

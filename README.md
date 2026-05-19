@@ -609,6 +609,23 @@ The service writes per-sequence log files next to the config file:
 That makes post-mortem debugging easier on Windows systems where interactive
 stdout/stderr is not available.
 
+### Shutdown timing and `SERVICE_CONTROL_PRESHUTDOWN`
+
+Windows enforces a very short per-service deadline during system shutdown —
+`HKLM\SYSTEM\CurrentControlSet\Control\WaitToKillServiceTimeout`, which
+defaults to 5 seconds on modern Windows. That is not long enough for the
+Furman serial dialogue, and the result is that the service process is
+force-terminated mid-shutdown and no `shutdown.log` is ever produced.
+
+To avoid this, the service opts into `SERVICE_ACCEPT_PRESHUTDOWN` and handles
+`SERVICE_CONTROL_PRESHUTDOWN`, which is dispatched earlier in the system
+shutdown sequence and is bounded by `PreshutdownTimeout` (default
+**180 seconds**). The actual shutdown sequence runs on a worker thread while
+the control handler periodically calls `ReportServiceStatus(STOP_PENDING, …)`
+so the SCM keeps waiting. The `shutdown.log` file handler is installed as the
+first action of the handler, so a record exists on disk even if the process
+is force-terminated.
+
 ### Build and deploy the service executable
 
 The Windows service runs from a self-contained PyInstaller executable instead
