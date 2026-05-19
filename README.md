@@ -437,10 +437,15 @@ Juicer stores configuration as TOML through `TomlStore`.
 ### Top-level fields
 
 - `port`: serial port name such as `COM3` or `/dev/ttyUSB0`
-- `event_start_sound`: optional WAV file played before a sequence starts
-- `event_stop_sound`: optional WAV file played after a sequence ends
 - `boot`: boot sequence configuration
 - `shutdown`: shutdown sequence configuration
+
+### Per-sequence fields
+
+Each sequence (`boot` and `shutdown`) has its own sound settings and four bank entries:
+
+- `event_start_sound`: optional WAV file played before the sequence starts
+- `event_stop_sound`: optional WAV file played after the sequence ends
 
 ### Per-bank fields
 
@@ -457,6 +462,8 @@ Each sequence has four bank entries:
 
 ```toml
 port = "COM3"
+
+[boot]
 event_start_sound = ""
 event_stop_sound = ""
 
@@ -479,6 +486,10 @@ post_delay_ms = 2000
 action = 1
 pre_delay_ms = 0
 post_delay_ms = 0
+
+[shutdown]
+event_start_sound = ""
+event_stop_sound = ""
 
 [shutdown.bank4]
 action = 0
