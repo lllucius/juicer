@@ -96,8 +96,7 @@ juicer/
 ├── manual.pdf
 ├── manual.txt
 ├── pyproject.toml
-├── requirements.txt
-├── requirements-dev.txt
+├── poetry.lock
 └── README.md
 ```
 
@@ -195,77 +194,56 @@ The tests are grouped by behavior:
 
 ## Installation
 
-Juicer is designed to install cleanly from source.
+Juicer uses [Poetry](https://python-poetry.org/) for all project and environment
+management. Install Poetry first if it is not already present:
 
-### Recommended: install with `uv`
+```bash
+curl -sSL https://install.python-poetry.org | python3 -
+```
+
+### Install with Poetry
 
 ```bash
 git clone https://github.com/lllucius/juicer.git
 cd juicer
 
-# Runtime package
-./scripts/install-uv.sh
+# Runtime package only
+poetry install
 
 # Runtime package + GUI dependencies
-./scripts/install-uv.sh --gui
+poetry install --extras gui
 
-# Developer install
-./scripts/install-uv.sh --dev
+# With Windows service dependencies (on Windows)
+poetry install --extras windows
 
-# Developer install with GUI
-./scripts/install-uv.sh --dev --gui
+# Full developer environment
+poetry install --with dev --extras "gui windows"
 ```
-
-On Windows PowerShell:
-
-```powershell
-pwsh -File scripts/install-uv.ps1 -Windows
-pwsh -File scripts/install-uv.ps1 -Dev -Windows
-```
-
-If PowerShell blocks the installer after download or clone:
-
-```powershell
-Unblock-File scripts/install-uv.ps1
-```
-
-### Manual `uv` workflow
-
-```bash
-uv venv
-uv pip install --python .venv/bin/python .
-uv pip install --python .venv/bin/python ".[gui]"
-uv pip install --python .venv/bin/python ".[windows]"
-uv pip install --python .venv/bin/python ".[dev]"
-```
-
-On Windows, use `.venv\Scripts\python.exe` in the `--python` argument.
 
 ### Activate the environment
 
-POSIX shells:
+Poetry manages the virtual environment automatically. To open a shell inside it:
 
 ```bash
-source .venv/bin/activate
+poetry shell
 ```
 
-Windows PowerShell:
+Or run a single command without activating:
 
-```powershell
-.venv\Scripts\Activate.ps1
+```bash
+poetry run juicer --help
 ```
 
 ### Smoke-test the install
 
 ```bash
-juicer --help
-python -m juicer --help
+poetry run juicer --help
 ```
 
 If PySide6 is installed:
 
 ```bash
-juicer-gui
+poetry run juicer-gui
 ```
 
 ---
@@ -627,10 +605,16 @@ of `pythonservice.exe`. This avoids service-start failures caused by an
 unactivated virtual environment, a missing Python DLL, or missing site-packages
 when the Service Control Manager starts the process.
 
-From a Windows PowerShell prompt:
+First install the build dependencies:
 
 ```powershell
-pwsh -File scripts/build-service.ps1 -Clean
+poetry install --with build --extras windows
+```
+
+Then build from the repository root:
+
+```powershell
+poetry run poe build-service
 ```
 
 The build output is:
@@ -639,25 +623,56 @@ The build output is:
 dist\juicer_service.exe
 ```
 
-The script installs Juicer's Windows extra plus the PyInstaller build tooling
-into the selected Python environment before running the build.
-
-To build and copy the executable to `%PROGRAMDATA%\Juicer`:
+Copy `dist\juicer_service.exe` to `%PROGRAMDATA%\Juicer\`, then install and
+start the service:
 
 ```powershell
-pwsh -File scripts/build-service.ps1 -Clean -Deploy
+poetry run juicer service install
+poetry run juicer service start
 ```
 
-To build, deploy, install, and start the service in one pass:
+Run those commands from an elevated shell if Windows blocks writing to
+`%PROGRAMDATA%` or service installation.
+
+### Build the CLI executable
+
+Install the build dependencies:
 
 ```powershell
-pwsh -File scripts/build-service.ps1 -Clean -Install -Start
+poetry install --with build --extras windows
 ```
 
-Run the deploy/install/start command from an elevated shell if Windows blocks
-writing to `%PROGRAMDATA%` or service installation. `-Install` and `-Start`
-delegate to the same `juicer service install` / `juicer service start` helpers
-used by the GUI and CLI.
+Then build:
+
+```powershell
+poetry run poe build-cli
+```
+
+The build output is:
+
+```text
+dist\juicer.exe
+```
+
+### Build the GUI executable
+
+Install the build dependencies:
+
+```powershell
+poetry install --with build --extras "gui windows"
+```
+
+Then build:
+
+```powershell
+poetry run poe build-gui
+```
+
+The build output is:
+
+```text
+dist\juicer-gui.exe
+```
 
 ### Manual service installation
 
@@ -748,26 +763,44 @@ protocol module has high test coverage and remains safe to refactor.
 ### Local development install
 
 ```bash
-python -m pip install -r requirements-dev.txt
+poetry install --with dev
 ```
-
-Or use the `uv`-based developer install shown earlier.
 
 ### Validation commands
 
 From the repository root:
 
 ```bash
-python -m ruff check src tests
-python -m mypy src
-python -m pytest
+poetry run ruff check src tests
+poetry run mypy src
+poetry run pytest
 ```
 
 ### Running from source
 
 ```bash
-python -m juicer --help
-python -m juicer.gui
+poetry run juicer --help
+poetry run python -m juicer.gui
+```
+
+### Updating dependencies
+
+To add a dependency:
+
+```bash
+poetry add <package>
+```
+
+To add a development dependency:
+
+```bash
+poetry add --group dev <package>
+```
+
+To update all dependencies to their latest allowed versions:
+
+```bash
+poetry update
 ```
 
 ### Capturing raw Furman serial responses
@@ -775,7 +808,7 @@ python -m juicer.gui
 To collect real-device prompt characters and unparsed response bytes, run:
 
 ```bash
-python scripts/capture_furman_protocol.py --port COM3 --output furman-capture.txt --yes
+poetry run python scripts/capture_furman_protocol.py --port COM3 --output furman-capture.txt --yes
 ```
 
 The capture script issues the full command set, including outlet switching and
@@ -812,7 +845,7 @@ tested on Linux or macOS.
 Install runtime dependencies:
 
 ```bash
-python -m pip install -r requirements.txt
+poetry install
 ```
 
 ### `PySide6 is required for the GUI`
@@ -820,7 +853,7 @@ python -m pip install -r requirements.txt
 Install the GUI extra:
 
 ```bash
-python -m pip install ".[gui]"
+poetry install --extras gui
 ```
 
 ### `pywin32 is required for service operations`
@@ -828,7 +861,7 @@ python -m pip install ".[gui]"
 Install the Windows extra on a Windows machine:
 
 ```bash
-python -m pip install ".[windows]"
+poetry install --extras windows
 ```
 
 ### The saved port does not auto-connect

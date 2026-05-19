@@ -1,15 +1,14 @@
 [build-system]
-requires = ["setuptools>=70", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["poetry-core>=2.0"]
+build-backend = "poetry.core.masonry.api"
 
-[project]
+[tool.poetry]
 name = "juicer"
 version = "2.0.0"
 description = "Python controller for the Furman F1500-UPS E via RS-232"
 readme = "README.md"
-license = { file = "LICENSE" }
-authors = [{ name = "Leland Lucius" }]
-requires-python = ">=3.11"
+license = "MIT"
+authors = ["Leland Lucius"]
 keywords = ["ups", "furman", "serial", "power-management"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -25,37 +24,44 @@ classifiers = [
     "Topic :: System :: Hardware",
     "Topic :: Utilities",
 ]
-dependencies = [
-    "click>=8.1",
-    "pydantic>=2.0",
-    "pyserial>=3.5",
-]
+packages = [{include = "juicer", from = "src"}]
 
-[project.optional-dependencies]
-gui = [
-    "PySide6>=6.6",
-]
-windows = [
-    "pywin32>=306",
-]
-dev = [
-    "pytest>=8.0",
-    "ruff>=0.4",
-    "mypy>=1.10",
-]
+[tool.poetry.dependencies]
+python = ">=3.11,<4.0"
+click = ">=8.1"
+pydantic = ">=2.0"
+pyserial = ">=3.5"
+PySide6 = {version = ">=6.6", optional = true, python = "<3.15"}
+pywin32 = {version = ">=306", optional = true}
 
-[project.scripts]
+[tool.poetry.extras]
+gui = ["PySide6"]
+windows = ["pywin32"]
+
+[tool.poetry.scripts]
 juicer = "juicer.cli:main"
-
-[project.gui-scripts]
 juicer-gui = "juicer.gui:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.poetry.group.dev.dependencies]
+mypy = ">=1.10"
+pytest = ">=8.0"
+pytest-cov = ">=5.0"
+ruff = ">=0.4"
+
+[tool.poetry.group.build.dependencies]
+pyinstaller = {version = ">=6.0", python = "<3.15"}
+pyinstaller-hooks-contrib = {version = ">=2024.0", python = "<3.15"}
+poethepoet = ">=0.34"
+
+[tool.poe.tasks]
+build-cli = "pyinstaller --clean --noconfirm scripts/juicer_cli.spec"
+build-gui = "pyinstaller --clean --noconfirm scripts/juicer_gui.spec"
+build-service = "pyinstaller --clean --noconfirm scripts/juicer_service.spec"
 
 [tool.ruff]
 src = ["src"]
 line-length = 100
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]

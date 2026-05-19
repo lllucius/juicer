@@ -1,4 +1,0 @@
-# Windows-specific service runtime dependencies
-# Install in addition to requirements.txt on Windows:
-#   pip install -r requirements.txt -r requirements-windows.txt
-pywin32>=306
