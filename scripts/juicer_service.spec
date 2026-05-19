@@ -72,9 +72,8 @@ a = Analysis(
         "serial.serialutil",
         "serial.serialwin32",
         "serial.win32",
-        # winreg / winsound (Windows stdlib, may be auto-found but list explicitly)
+        # winreg (Windows stdlib, may be auto-found but list explicitly)
         "winreg",
-        "winsound",
     ],
     hookspath=[],
     hooksconfig={},

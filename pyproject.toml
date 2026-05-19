@@ -78,9 +78,9 @@ module = "juicer.gui"
 disable_error_code = ["misc", "untyped-decorator"]
 
 [[tool.mypy.overrides]]
-# winreg and winsound are Windows-only stdlib modules.  Their typeshed stubs hide
-# all attributes behind sys.platform == "win32" guards, so attribute accesses
-# (OpenKey, PlaySound, etc.) would raise [attr-defined] on non-Windows.
-# All callers already guard execution with _ensure_windows() / platform checks.
-module = ["juicer.config", "juicer.sequence", "juicer.service"]
+# winreg is a Windows-only stdlib module.  Its typeshed stubs hide all
+# attributes behind sys.platform == "win32" guards, so attribute accesses
+# (OpenKey, etc.) would raise [attr-defined] on non-Windows.
+# Callers already guard execution with _ensure_windows() / platform checks.
+module = ["juicer.service"]
 disable_error_code = ["attr-defined"]

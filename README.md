@@ -442,10 +442,7 @@ Juicer stores configuration as TOML through `TomlStore`.
 
 ### Per-sequence fields
 
-Each sequence (`boot` and `shutdown`) has its own sound settings and four bank entries:
-
-- `event_start_sound`: optional WAV file played before the sequence starts
-- `event_stop_sound`: optional WAV file played after the sequence ends
+Each sequence (`boot` and `shutdown`) has four bank entries.
 
 ### Per-bank fields
 
@@ -464,8 +461,6 @@ Each sequence has four bank entries:
 port = "COM3"
 
 [boot]
-event_start_sound = ""
-event_stop_sound = ""
 
 [boot.bank1]
 action = 1
@@ -488,8 +483,6 @@ pre_delay_ms = 0
 post_delay_ms = 0
 
 [shutdown]
-event_start_sound = ""
-event_stop_sound = ""
 
 [shutdown.bank4]
 action = 0
@@ -560,11 +553,6 @@ Service Control Manager during lengthy boot sequences instead of appearing hung.
 Sequence execution optionally accepts a cancellation token. That lets the
 service stop sequence processing cleanly when a stop request arrives during
 startup.
-
-### Sound playback
-
-Optional event sounds are only played on Windows through `winsound`. On other
-platforms the code logs that sound playback was skipped.
 
 ---
 
