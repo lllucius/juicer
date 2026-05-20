@@ -222,6 +222,31 @@ def test_service_boot_and_shutdown_logs_are_written_next_to_config(
     assert sound_flags == [False, False]
 
 
+def test_play_configured_event_sound_uses_requested_sequence_sound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import juicer.config as config_module
+    import juicer.sequence as sequence_module
+    import juicer.service as service_module
+
+    sounds: list[str] = []
+
+    class FakeStore:
+        def load(self) -> config_module.GlobalConfig:
+            return config_module.GlobalConfig(
+                boot=config_module.SequenceConfig(event_stop_sound="startup-complete.wav"),
+                shutdown=config_module.SequenceConfig(event_start_sound="shutdown-start.wav"),
+            )
+
+    monkeypatch.setattr(config_module, "TomlStore", FakeStore)
+    monkeypatch.setattr(sequence_module, "play_sound", sounds.append)
+
+    service_module._play_configured_event_sound("boot", "event_stop_sound")
+    service_module._play_configured_event_sound("shutdown", "event_start_sound")
+
+    assert sounds == ["startup-complete.wav", "shutdown-start.wav"]
+
+
 def test_svc_do_run_warns_when_service_log_cannot_be_opened(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
