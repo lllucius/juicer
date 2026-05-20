@@ -320,7 +320,13 @@ def _run_boot_sequence(
             if progress_callback is not None:
                 progress_callback()
             client = JuicerClient(transport)
-            run_boot(config, client, progress_callback=progress_callback, cancel=cancel)
+            run_boot(
+                config,
+                client,
+                progress_callback=progress_callback,
+                cancel=cancel,
+                play_event_sounds=False,
+            )
         finally:
             transport.close()
 
@@ -339,7 +345,7 @@ def _run_shutdown_sequence() -> None:
         transport.open()
         try:
             client = JuicerClient(transport)
-            run_shutdown(config, client)
+            run_shutdown(config, client, play_event_sounds=False)
         finally:
             transport.close()
 
@@ -739,6 +745,23 @@ def uninstall_service(*, elevate: bool = True) -> None:
     logger.info("Service '%s' uninstalled", SERVICE_NAME)
 
 
+def _play_configured_event_sound(
+    sequence_name: Literal["boot", "shutdown"],
+    sound_name: Literal["event_start_sound", "event_stop_sound"],
+) -> None:
+    """Play a configured sound from an interactive service-management process."""
+    try:
+        from juicer.config import TomlStore
+        from juicer.sequence import play_sound
+
+        config = TomlStore().load()
+        sequence = getattr(config, sequence_name)
+        path = getattr(sequence, sound_name)
+        play_sound(cast(str, path))
+    except Exception as exc:
+        logger.warning("Unable to play %s.%s: %s", sequence_name, sound_name, exc)
+
+
 def start_service(*, elevate: bool = True) -> None:
     """Start the Juicer service."""
     _ensure_pywin32()
@@ -758,6 +781,7 @@ def start_service(*, elevate: bool = True) -> None:
             f"'{SERVICE_NAME}'."
         ) from exc
     logger.info("Service '%s' started", SERVICE_NAME)
+    _play_configured_event_sound("boot", "event_stop_sound")
 
 
 def stop_service(*, elevate: bool = True) -> None:
@@ -766,6 +790,7 @@ def stop_service(*, elevate: bool = True) -> None:
     if not _request_elevation_if_needed("stop", elevate):
         logger.info("Service '%s' stop delegated to elevated process", SERVICE_NAME)
         return
+    _play_configured_event_sound("shutdown", "event_start_sound")
     win32serviceutil.StopService(SERVICE_NAME)
     logger.info("Service '%s' stopped", SERVICE_NAME)
 

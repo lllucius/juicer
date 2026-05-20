@@ -45,6 +45,8 @@ class SequenceConfig(BaseModel):
 
     model_config = ConfigDict(validate_assignment=True)
 
+    event_start_sound: str = ""
+    event_stop_sound: str = ""
     bank1: BankConfig = Field(default_factory=BankConfig)
     bank2: BankConfig = Field(default_factory=BankConfig)
     bank3: BankConfig = Field(default_factory=BankConfig)
@@ -178,11 +180,21 @@ def _bank_to_toml(name: str, cfg: BankConfig) -> list[str]:
     return lines
 
 
-def _sequence_to_toml(name: str, seq: SequenceConfig) -> list[str]:
+def _sequence_to_toml(
+    name: str,
+    seq: SequenceConfig,
+    *,
+    include_start_sound: bool = False,
+    include_stop_sound: bool = False,
+) -> list[str]:
     """Serialize all bank sections for one named sequence."""
     lines: list[str] = [
         f"[{name}]",
     ]
+    if include_start_sound:
+        lines.append(f"event_start_sound = {_format_toml_value(seq.event_start_sound)}")
+    if include_stop_sound:
+        lines.append(f"event_stop_sound = {_format_toml_value(seq.event_stop_sound)}")
     for bank in range(1, NUM_BANKS + 1):
         lines.append("")
         lines.extend(_bank_to_toml(f"{name}.bank{bank}", seq.bank(bank)))
@@ -195,9 +207,9 @@ def dump_config_toml(config: GlobalConfig) -> str:
         f"port = {_format_toml_value(config.port)}",
         "",
     ]
-    lines.extend(_sequence_to_toml("boot", config.boot))
+    lines.extend(_sequence_to_toml("boot", config.boot, include_stop_sound=True))
     lines.append("")
     lines.append("")
-    lines.extend(_sequence_to_toml("shutdown", config.shutdown))
+    lines.extend(_sequence_to_toml("shutdown", config.shutdown, include_start_sound=True))
     lines.append("")
     return "\n".join(lines)

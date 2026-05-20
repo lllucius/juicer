@@ -56,6 +56,8 @@ a = Analysis(
         "serial.win32",
         # click (used by juicer.cli, imported by juicer.gui for service tab)
         "click",
+        # Windows stdlib helpers
+        "winsound",
         # winreg (Windows stdlib)
         "winreg",
         # pywin32 (optional; service tab)

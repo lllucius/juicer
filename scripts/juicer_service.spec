@@ -72,6 +72,8 @@ a = Analysis(
         "serial.serialutil",
         "serial.serialwin32",
         "serial.win32",
+        # Windows stdlib sound helper used by interactive service commands
+        "winsound",
         # winreg (Windows stdlib, may be auto-found but list explicitly)
         "winreg",
     ],

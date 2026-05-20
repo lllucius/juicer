@@ -53,6 +53,8 @@ a = Analysis(
         "serial.serialutil",
         "serial.serialwin32",
         "serial.win32",
+        # Windows stdlib helpers
+        "winsound",
         # click
         "click",
         # winreg (Windows stdlib; used by juicer.config / juicer.service)

@@ -129,7 +129,7 @@ Defines the persistent TOML-backed configuration model:
 Runs boot and shutdown sequences using:
 
 - a configured bank order,
-- optional start/stop sounds,
+- optional startup-complete and shutdown-start sounds,
 - injected sleeper/cancellation/progress callbacks, and
 - a minimal switch-capable client protocol.
 
@@ -442,7 +442,11 @@ Juicer stores configuration as TOML through `TomlStore`.
 
 ### Per-sequence fields
 
-Each sequence (`boot` and `shutdown`) has four bank entries.
+Each sequence (`boot` and `shutdown`) has four bank entries. Juicer also supports
+two optional WAV cues:
+
+- `boot.event_stop_sound`: played after the boot/startup sequence completes
+- `shutdown.event_start_sound`: played before the shutdown sequence starts
 
 ### Per-bank fields
 
@@ -461,6 +465,7 @@ Each sequence has four bank entries:
 port = "COM3"
 
 [boot]
+event_stop_sound = ""
 
 [boot.bank1]
 action = 1
@@ -483,6 +488,7 @@ pre_delay_ms = 0
 post_delay_ms = 0
 
 [shutdown]
+event_start_sound = ""
 
 [shutdown.bank4]
 action = 0
@@ -547,6 +553,15 @@ This is a small but important implementation detail:
 
 This allows the Windows service to keep reporting startup progress to the
 Service Control Manager during lengthy boot sequences instead of appearing hung.
+
+### Sound playback
+
+Only two sequence sounds are used: the boot/startup stop sound and the shutdown
+start sound. Direct CLI/GUI sequence runs play them in the interactive process.
+The Windows service process itself suppresses sequence sound playback because
+services run in session 0, where `winsound.PlaySound` can succeed silently
+without an audible user audio endpoint. Interactive service-management commands
+play the configured cues before stopping the service and after starting it.
 
 ### Cancellation model
 
