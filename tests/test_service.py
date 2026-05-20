@@ -8,6 +8,7 @@ import sys
 import types
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -195,10 +196,14 @@ def test_service_boot_and_shutdown_logs_are_written_next_to_config(
         def __init__(self, transport: FakeTransport) -> None:
             self.transport = transport
 
+    sound_flags: list[bool] = []
+
     def run_boot(*args: object, **kwargs: object) -> None:
+        sound_flags.append(cast(bool, kwargs["play_event_sounds"]))
         logging.getLogger("juicer.sequence").info("boot sequence detail")
 
     def run_shutdown(*args: object, **kwargs: object) -> None:
+        sound_flags.append(cast(bool, kwargs["play_event_sounds"]))
         logging.getLogger("juicer.sequence").info("shutdown sequence detail")
 
     monkeypatch.setattr(config_module, "TomlStore", FakeStore)
@@ -214,6 +219,32 @@ def test_service_boot_and_shutdown_logs_are_written_next_to_config(
     assert (tmp_path / "shutdown.log").is_file()
     assert "boot sequence detail" in (tmp_path / "boot.log").read_text(encoding="utf-8")
     assert "shutdown sequence detail" in (tmp_path / "shutdown.log").read_text(encoding="utf-8")
+    assert sound_flags == [False, False]
+
+
+def test_play_configured_event_sound_uses_requested_sequence_sound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import juicer.config as config_module
+    import juicer.sequence as sequence_module
+    import juicer.service as service_module
+
+    sounds: list[str] = []
+
+    class FakeStore:
+        def load(self) -> config_module.GlobalConfig:
+            return config_module.GlobalConfig(
+                boot=config_module.SequenceConfig(event_stop_sound="startup-complete.wav"),
+                shutdown=config_module.SequenceConfig(event_start_sound="shutdown-start.wav"),
+            )
+
+    monkeypatch.setattr(config_module, "TomlStore", FakeStore)
+    monkeypatch.setattr(sequence_module, "play_sound", sounds.append)
+
+    service_module._play_configured_event_sound("boot", "event_stop_sound")
+    service_module._play_configured_event_sound("shutdown", "event_start_sound")
+
+    assert sounds == ["startup-complete.wav", "shutdown-start.wav"]
 
 
 def test_svc_do_run_warns_when_service_log_cannot_be_opened(

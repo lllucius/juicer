@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from juicer.config import BankAction, BankConfig, SequenceConfig
-from juicer.sequence import _sleep_with_progress, run_sequence
+import pytest
+
+from juicer.config import BankAction, BankConfig, GlobalConfig, SequenceConfig
+from juicer.sequence import _sleep_with_progress, run_boot, run_sequence, run_shutdown
 
 
 class _SwitchRecorder:
@@ -74,3 +76,53 @@ def test_sleep_with_progress_uses_injected_sleeper_in_chunks() -> None:
 
     assert sleeps == [4.0, 4.0, 3.0]
     assert progress_count == 2
+
+
+def test_run_boot_plays_only_startup_stop_sound(monkeypatch: pytest.MonkeyPatch) -> None:
+    sounds: list[str] = []
+    config = GlobalConfig(
+        boot=SequenceConfig(
+            event_start_sound="ignored.wav",
+            event_stop_sound="startup-complete.wav",
+            bank1=BankConfig(action=BankAction.ON),
+        )
+    )
+
+    monkeypatch.setattr("juicer.sequence.play_sound", sounds.append)
+
+    run_boot(config, _SwitchRecorder([]))
+
+    assert sounds == ["startup-complete.wav"]
+
+
+def test_run_shutdown_plays_only_shutdown_start_sound(monkeypatch: pytest.MonkeyPatch) -> None:
+    sounds: list[str] = []
+    config = GlobalConfig(
+        shutdown=SequenceConfig(
+            event_start_sound="shutdown-start.wav",
+            event_stop_sound="ignored.wav",
+            bank1=BankConfig(action=BankAction.OFF),
+        )
+    )
+
+    monkeypatch.setattr("juicer.sequence.play_sound", sounds.append)
+
+    run_shutdown(config, _SwitchRecorder([]))
+
+    assert sounds == ["shutdown-start.wav"]
+
+
+def test_run_boot_can_suppress_event_sounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    sounds: list[str] = []
+    config = GlobalConfig(
+        boot=SequenceConfig(
+            event_stop_sound="startup-complete.wav",
+            bank1=BankConfig(action=BankAction.ON),
+        )
+    )
+
+    monkeypatch.setattr("juicer.sequence.play_sound", sounds.append)
+
+    run_boot(config, _SwitchRecorder([]), play_event_sounds=False)
+
+    assert sounds == []
